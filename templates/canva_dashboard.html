@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Canva Dashboard</title>
+
+    <style>
+        body {
+            font-family: Arial;
+            background: #f4f4f4;
+            text-align: center;
+            padding: 20px;
+        }
+
+        h1 {
+            color: #333;
+        }
+
+        .container {
+            background: white;
+            padding: 20px;
+            margin: auto;
+            width: 85%;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+
+        .top-bar {
+            margin-bottom: 20px;
+        }
+
+        button {
+            padding: 10px 15px;
+            border: none;
+            background: #00c4cc;
+            color: white;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background: #009aa3;
+        }
+
+        #designs-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 15px;
+        }
+
+        .card {
+            background: #fff;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 10px;
+        }
+
+        .card img {
+            width: 100%;
+            border-radius: 5px;
+        }
+
+        .status {
+            margin: 10px 0;
+            font-weight: bold;
+        }
+
+        .green { color: green; }
+        .red { color: red; }
+    </style>
+</head>
+
+<body>
+
+<h1>🖥️ Canva Dashboard</h1>
+
+<div class="container">
+
+    <!-- TOP BAR -->
+    <div class="top-bar">
+        <button onclick="location.href='/'">🏠 Home</button>
+        <button onclick="location.href='/api/canva/login/'">🔄 Reconnect</button>
+        <button onclick="location.href='/api/canva/open/'">🎨 Open Canva</button>
+    </div>
+
+    <!-- STATUS -->
+    <div class="status" id="status">Loading status...</div>
+
+    <!-- DESIGN GRID -->
+    <div id="designs-grid">
+        Loading designs...
+    </div>
+
+</div>
+
+<script>
+async function loadDashboard() {
+    try {
+        const res = await fetch('/api/canva/saved-designs/');
+        const data = await res.json();
+
+        const grid = document.getElementById("designs-grid");
+        grid.innerHTML = "";
+
+        if (data.designs && data.designs.length > 0) {
+
+            data.designs.forEach(d => {
+                const div = document.createElement("div");
+                div.className = "card";
+
+                div.innerHTML = `
+                    <img src="${d.url}" />
+                    <p>ID: ${d.id}</p>
+                `;
+
+                grid.appendChild(div);
+            });
+
+        } else {
+            grid.innerHTML = "<p>No designs found</p>";
+        }
+
+        document.getElementById("status").innerHTML =
+            "✅ Dashboard Loaded Successfully";
+
+        document.getElementById("status").className = "status green";
+
+    } catch (e) {
+        document.getElementById("status").innerHTML =
+            "❌ Failed to load dashboard";
+
+        document.getElementById("status").className = "status red";
+    }
+}
+
+loadDashboard();
+</script>
+
+</body>
+</html>
