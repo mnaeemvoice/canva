@@ -40,10 +40,21 @@ def canva_login(request):
     code_verifier = generate_code_verifier()
     code_challenge = generate_code_challenge(code_verifier)
 
-    state = str(uuid.uuid4())  # 🔥 unique state generate
-
-    # 🔥 store verifier with state
+    state = str(uuid.uuid4())
     cache.set(f"canva_verifier_{state}", code_verifier, timeout=600)
+
+    scope = (
+        "profile:read "
+        "app:read app:write "
+        "design:content:read design:content:write "
+        "design:meta:read "
+        "design:permission:read design:permission:write "
+        "folder:read folder:write folder:permission:read folder:permission:write "
+        "asset:read asset:write "
+        "comment:read comment:write "
+        "brandtemplate:content:read brandtemplate:content:write brandtemplate:meta:read "
+        "collaboration:event"
+    )
 
     url = (
         "https://www.canva.com/api/oauth/authorize"
@@ -53,33 +64,39 @@ def canva_login(request):
         f"&code_challenge={code_challenge}"
         f"&redirect_uri={settings.REDIRECT_URI}"
         f"&state={state}"
-        "&scope=design:content:read design:meta:read"
+        f"&scope={scope}"
     )
 
     return redirect(url)
 # ======================
 # CALLBACK
 # ======================
+# CALLBACK (AUTO WEBHOOK FIXED)
+# ======================
 @api_view(['GET'])
 def canva_callback(request):
+
+    import requests
+
     code = request.GET.get("code")
     state = request.GET.get("state")
 
+    print("\n🔥 CANVA CALLBACK START")
+
     if not code:
-        return Response({"error": "Missing authorization code"})
+        return Response({"error": "Missing code"})
 
-    if not state:
-        return Response({"error": "Missing state parameter"})
-
-    # ✅ get verifier
+    # ======================
+    # PKCE VERIFY
+    # ======================
     code_verifier = cache.get(f"canva_verifier_{state}")
 
     if not code_verifier:
-        return Response({
-            "error": "Code verifier not found (cache expired or invalid state)"
-        })
+        return Response({"error": "Code verifier expired"})
 
-    # 🔐 exchange token
+    # ======================
+    # TOKEN REQUEST
+    # ======================
     data = {
         "grant_type": "authorization_code",
         "client_id": settings.CLIENT_ID,
@@ -89,6 +106,8 @@ def canva_callback(request):
         "code_verifier": code_verifier
     }
 
+    print("🚀 TOKEN REQUEST SENT")
+
     response = requests.post(
         "https://api.canva.com/rest/v1/oauth/token",
         data=data
@@ -96,271 +115,386 @@ def canva_callback(request):
 
     try:
         token_data = response.json()
-    except Exception:
+    except:
         return Response({
-            "error": "Invalid response from Canva",
-            "response_text": response.text
+            "error": "Invalid token response",
+            "raw": response.text
         })
 
-    if "access_token" not in token_data:
-        return Response({
-            "error": "Token not received",
-            "canva_response": token_data
-        })
+    access_token = token_data.get("access_token")
 
-    # ✅ save session
-    request.session["access_token"] = token_data["access_token"]
-    request.session["canva_connected"] = True
-    print("🎉 access_token saved")
-    # 🧹 clear cache
+    if not access_token:
+        return Response(token_data)
+
+    # ======================
+    # SAVE TOKEN
+    # ======================
+    conn, _ = CanvaConnection.objects.get_or_create(id=1)
+    conn.access_token = access_token
+    conn.refresh_token = token_data.get("refresh_token")
+    conn.save()
+
+    print("✅ TOKEN SAVED")
+
+    # ======================
+    # ⚠️ WEBHOOK NOTE (IMPORTANT FIX)
+    # ======================
+    print("\n⚠️ WEBHOOK NOTE:")
+    print("Canva REST API me /webhooks endpoint available nahi hota.")
+    print("Webhook registration MUST be done in Canva Developer Dashboard.")
+
+    print("\n👉 Use this URL in Canva App settings:")
+    print(f"{settings.NGROK_URL}/api/canva/webhook/")
+
+    print("\n👉 Events to enable:")
+    print([
+        "design/exported",
+        "design/updated",
+        "asset/created"
+    ])
+
+    # ======================
+    # CLEANUP
+    # ======================
     cache.delete(f"canva_verifier_{state}")
-    CanvaConnection.save_token(
-    access_token=token_data["access_token"],
-    refresh_token=token_data.get("refresh_token"),
-    expires_at=None
-)
 
-    # 🚀 FINAL REDIRECT TO CANVA PAGE
     return redirect("/api/canva/dashboard/")
-    
-                         
 
 # ======================
-# PROFILE
-# ======================
-@api_view(['POST']) # Changed from GET to POST
-def canva_profile(request):
-    # Get access token from request body (for frontend POST) or session
-    access_token = request.data.get("access_token") or request.session.get("access_token")
-
-    if not access_token:
-        return Response({"error": "User not logged in or session expired"})
-
-    headers = {
-        "Authorization": f"Bearer {access_token}"
-    }
-
-    response = requests.get(
-        "https://api.canva.com/rest/v1/oauth/profile",
-        headers=headers
-    )
-
-    return Response(response.json() if response.ok else {
-        "error": response.text,
-        "status_code": response.status_code
-    })
-# ======================
-# DESIGNS
-# ======================
-@api_view(['POST']) # Changed from GET to POST
-def canva_designs(request):
-    # Get access token from request body (for frontend POST) or session
-    access_token = request.data.get("access_token") or request.session.get("access_token")
-
-    if not access_token:
-        return Response({"error": "User not logged in or session expired"})
-
-    headers = {
-        "Authorization": f"Bearer {access_token}"
-    }
-
-    response = requests.get(
-        "https://api.canva.com/rest/v1/oauth/designs",
-        headers=headers
-    )
-
-    return Response(response.json() if response.ok else {
-        "error": response.text,
-        "status_code": response.status_code
-    })
-
-
-# ======================
-# WEBHOOK
+# 🔥 SUPER DEBUG WEBHOOK (FINAL)
 # ======================
 @api_view(['POST'])
 def canva_webhook(request):
 
-    import json, uuid, os
+    import json, os, traceback
     from django.conf import settings
-    from rest_framework.response import Response
-    from .models import CanvaDesign
 
-    print("\n🔥 CANVA WEBHOOK HIT")
+    print("\n🔥 ===== CANVA WEBHOOK HIT =====")
 
-    try:
-        data = json.loads(request.body.decode("utf-8"))
-    except:
-        data = request.data or {}
-
-    # ⚡ FAST ACK FIRST (IMPORTANT)
-    response_data = {
-        "status": "received"
+    debug = {
+        "method": request.method,
+        "content_type": request.content_type,
+        "raw_body": None,
+        "parsed": None,
+        "headers": dict(request.headers),
+        "errors": [],
+        "status": "unknown"
     }
 
-    # ================= EVENT =================
-    event_type = (
-        data.get("event")
-        or data.get("event_type")
-        or data.get("type")
-        or ""
-    ).lower()
+    # RAW BODY
+    try:
+        raw = request.body.decode("utf-8")
+        debug["raw_body"] = raw
+        print("📩 RAW:", raw)
+    except Exception as e:
+        debug["errors"].append(str(e))
 
-    # ================= DESIGN ID =================
+    # JSON PARSE
+    try:
+        data = json.loads(request.body.decode("utf-8"))
+        debug["parsed"] = data
+    except Exception as e:
+        data = {}
+        debug["errors"].append(str(e))
+
+    # EVENT
+    event = data.get("event") or data.get("type") or data.get("event_type")
+
+    print("🎯 EVENT:", event)
+
+    if not event:
+        print("❌ NO EVENT RECEIVED")
+
+    # DESIGN ID
     design_id = (
         data.get("data", {}).get("design", {}).get("id")
         or data.get("design_id")
-        or str(uuid.uuid4())
+        or None
     )
 
-    # ================= LOG ONLY =================
-    log_dir = os.path.join(settings.MEDIA_ROOT, "canva_logs")
-    os.makedirs(log_dir, exist_ok=True)
+    print("🆔 DESIGN ID:", design_id)
 
-    with open(os.path.join(log_dir, "events.log"), "a") as f:
-        f.write(json.dumps(data) + "\n")
+    # SAVE LOG FILE
+    try:
+        log_dir = os.path.join(settings.MEDIA_ROOT, "canva_logs")
+        os.makedirs(log_dir, exist_ok=True)
 
-    # ================= DB SAVE =================
-    CanvaDesign.objects.update_or_create(
-        design_id=design_id,
-        defaults={
-            "status": event_type,
-            "raw_data": json.dumps(data)
-        }
+        with open(os.path.join(log_dir, "webhook.log"), "a") as f:
+            f.write(json.dumps(data) + "\n")
+
+    except Exception as e:
+        debug["errors"].append(str(e))
+
+    print("📊 DEBUG:", debug)
+
+    return Response({
+        "ok": True,
+        "debug": debug
+    })
+# ======================
+# PROFILE
+# ======================
+@api_view(['GET'])
+def canva_profile(request):
+
+    # 🔐 Token from session (best practice)
+    access_token = request.session.get("access_token")
+
+    if not access_token:
+        return Response({
+            "error": "User not logged in or session expired"
+        }, status=401)
+
+    headers = {
+        "Authorization": f"Bearer {access_token}"
+    }
+
+    try:
+        response = requests.get(
+            "https://api.canva.com/rest/v1/users/me",
+            headers=headers,
+            timeout=10
+        )
+
+        if response.ok:
+            return Response(response.json())
+
+        return Response({
+            "error": response.text,
+            "status_code": response.status_code
+        }, status=response.status_code)
+
+    except Exception as e:
+        return Response({
+            "error": str(e)
+        }, status=500)
+# ======================
+# DESIGNS
+# ======================
+@api_view(['GET'])
+def canva_designs(request):
+
+    import requests, time
+
+    access_token = request.session.get("access_token")
+
+    if not access_token:
+        return Response({"error": "Not logged in"}, status=401)
+
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json"
+    }
+
+    # ================= GET DESIGNS =================
+    response = requests.get(
+        "https://api.canva.com/rest/v1/designs",
+        headers=headers,
+        timeout=20
     )
 
-    print("✅ EVENT STORED:", event_type)
+    try:
+        data = response.json()
+    except:
+        return Response({"error": response.text}, status=500)
 
-    # ⚡ RETURN IMMEDIATELY (CRITICAL)
-    return Response(response_data)
+    designs = data.get("items") or data.get("designs") or []
+
+    saved = []
+
+    # ================= LOOP =================
+    for d in designs:
+
+        design_id = d.get("id")
+        if not design_id:
+            continue
+
+        title = (
+            d.get("title")
+            or d.get("name")
+            or f"Design {design_id[:6]}"
+        )
+
+        asset_url = None
+        asset_type = "unknown"
+
+        # ================= FORCE EXPORT =================
+        try:
+            export_res = requests.post(
+                "https://api.canva.com/rest/v1/exports",
+                headers=headers,
+                json={
+                    "design_id": design_id,
+                    "format": "png"   # 👈 ALWAYS GET IMAGE
+                },
+                timeout=20
+            )
+
+            export_data = export_res.json()
+
+            job_id = export_data.get("job", {}).get("id")
+
+            if job_id:
+
+                # wait for processing
+                time.sleep(2)
+
+                result = requests.get(
+                    f"https://api.canva.com/rest/v1/exports/{job_id}",
+                    headers=headers
+                )
+
+                result_data = result.json()
+
+                urls = result_data.get("export", {}).get("urls", [])
+
+                if urls:
+                    asset_url = urls[0]
+                    asset_type = "image"
+
+        except Exception as e:
+            print("EXPORT ERROR:", e)
+
+        # ================= SAVE =================
+        obj, _ = CanvaDesign.objects.update_or_create(
+            design_id=design_id,
+            defaults={
+                "title": title,
+                "asset_url": asset_url,
+                "asset_type": asset_type,
+                "raw_data": str(d)
+            }
+        )
+
+        saved.append(obj)
+
+    return Response({
+        "count": len(saved),
+        "designs": [
+            {
+                "id": s.design_id,
+                "title": s.title,
+                "asset": s.asset_url,
+                "type": s.asset_type
+            }
+            for s in saved
+        ]
+    })
+@api_view(['GET'])
+def register_webhook(request):
+
+    conn = CanvaConnection.objects.first()
+
+    if not conn or not conn.access_token:
+        return Response({"error": "No token found"})
+
+    webhook_url = f"{settings.NGROK_URL}/api/canva/webhook/"
+
+    headers = {
+        "Authorization": f"Bearer {conn.access_token}",
+        "Content-Type": "application/json"
+    }
+
+    print("\n🔥 REGISTERING WEBHOOK")
+    print("URL:", webhook_url)
+    print("SCOPE TOKEN EXISTS:", bool(conn.access_token))
+
+    data = {
+        "url": webhook_url,
+        "events": [
+            "design.exported",
+            "design.updated",
+            "asset.created"
+        ]
+    }
+
+    res = requests.post(
+        "https://api.canva.com/rest/v1/webhooks",
+        json=data,
+        headers=headers
+    )
+
+    print("📡 RESPONSE STATUS:", res.status_code)
+    print("📡 RESPONSE TEXT:", res.text)
+
+    return Response({
+        "status": res.status_code,
+        "data": res.json() if res.headers.get("content-type") == "application/json" else res.text
+    })
 # ======================
-# DASHBOARD
-# ======================
-@api_view(['GET']) # A dashboard page will typically be a GET request
 def canva_dashboard(request):
-    # This view will display saved designs
-    return render(request, "canva_dashboard.html")
+    designs = CanvaDesign.objects.all().order_by("-id")
 
+    cleaned_designs = []
+
+    for d in designs:
+        cleaned_designs.append({
+            "id": d.design_id,
+            "title": d.title or "Untitled Design",
+
+            # ✅ correct field
+            "thumbnail": d.asset_url
+        })
+
+    return render(request, "canva_dashboard.html", {
+        "designs": cleaned_designs
+    })
 # ======================
 # SAVED DESIGNS API
 # ======================
 @api_view(['GET'])
 def list_saved_canva_designs(request):
-    save_dir = os.path.join(settings.MEDIA_ROOT, "canva")
-    if not os.path.exists(save_dir):
-        return Response({"designs": []})
 
-    design_files = []
-    for filename in os.listdir(save_dir):
-        if filename.endswith(".png"): # Assuming designs are saved as PNG
-            design_id = filename.replace(".png", "")
-            # Assuming MEDIA_URL is configured in settings.py to serve these files
-            # For example, MEDIA_URL = '/media/'
-            design_url = f"/media/canva/{filename}" # Construct URL for the frontend
-            design_files.append({"id": design_id, "url": design_url})
+    designs = CanvaDesign.objects.all().order_by("-id")
 
-    return Response({"designs": design_files})
+    result = []
 
+    for d in designs:
+        result.append({
+            "id": d.design_id,
+            "title": d.title or "Untitled",
+            "asset": d.asset_url or None
+        })
 
-import requests
+    return Response({
+        "count": len(result),
+        "designs": result
+    })
+from django.utils import timezone
 from django.shortcuts import redirect
-from .models import CanvaConnection
-
-import requests
-from django.shortcuts import redirect
-from .models import CanvaConnection
-import jwt
-
+from .models import CanvaConnection, CanvaDesign
+import uuid
 
 def open_canva(request):
 
     conn = CanvaConnection.objects.first()
 
     if not conn or not conn.access_token:
-        print("❌ No access token found")
         return redirect("/")
 
-    token = conn.access_token
+    print("🚀 Opening Canva Dashboard")
 
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
+    # =========================
+    # 🔥 MANUAL EVENT LOG (SIMULATED WEBHOOK)
+    # =========================
+    design_id = str(uuid.uuid4())
 
-    # =============================
-    # 🔍 1. PRINT TOKEN SCOPES
-    # =============================
-    try:
-        decoded = jwt.decode(token, options={"verify_signature": False})
-        print("\n========== TOKEN DEBUG ==========")
-        print("SUBJECT:", decoded.get("sub"))
-        print("SCOPES:", decoded.get("scopes"))
-        print("ROLE:", decoded.get("roles"))
-        print("=================================\n")
+    CanvaDesign.objects.create(
+        design_id=design_id,
+        status="app_open_trigger",
+        raw_data={
+            "event": "app_opened",
+            "source": "open_canva",
+            "timestamp": str(timezone.now())
+        }
+    )
 
-    except Exception as e:
-        print("Token decode error:", str(e))
+    print("📡 MANUAL EVENT STORED:", design_id)
 
-    # =============================
-    # 🔥 2. CREATE DESIGN CALL
-    # =============================
-    try:
-        response = requests.post(
-            "https://api.canva.com/rest/v1/designs",
-            headers=headers,
-            json={"title": "My Design from Django"},
-            timeout=10
-        )
-
-        print("\n========== CANVA API RESPONSE ==========")
-        print("STATUS:", response.status_code)
-        print("HEADERS:", dict(response.headers))
-        print("TEXT:", response.text)
-        print("========================================\n")
-
-        # Try JSON parsing safely
-        try:
-            data = response.json()
-        except Exception:
-            print("❌ Response is not JSON")
-            return redirect("/")
-
-        # =============================
-        # 🧠 CHECK MISSING SCOPES
-        # =============================
-        if response.status_code == 403:
-            print("❌ PERMISSION ERROR DETECTED")
-
-            if "missing_scope" in response.text:
-                print("👉 Missing scopes detected in response")
-                print("👉 Fix in Canva Dashboard and re-login user")
-
-            return redirect("/")
-
-        # =============================
-        # 🧾 HANDLE DESIGN ID
-        # =============================
-        design_id = data.get("id")
-
-        if design_id:
-            print("✅ Design created:", design_id)
-            return redirect(f"https://www.canva.com/design/{design_id}")
-
-        # =============================
-        # 🧾 HANDLE JOB FLOW
-        # =============================
-        job_id = data.get("job", {}).get("id")
-
-        if job_id:
-            print("⏳ Job created:", job_id)
-            return redirect("/api/canva/dashboard/")
-
-        print("⚠️ Unexpected response format")
-
-    except Exception as e:
-        print("🔥 ERROR:", str(e))
-
-    return redirect("/")
+    # =========================
+    # REDIRECT TO CANVA
+    # =========================
+    return redirect("https://www.canva.com/")
 @api_view(['GET'])
 def canva_monitor(request):
 
@@ -475,79 +609,3 @@ def canva_monitor(request):
     logger.info(f"CANVA MONITOR RUN: {results}")
 
     return Response(results)
-@api_view(['GET'])
-def register_webhook(request):
-
-    import requests
-    from django.conf import settings
-    from .models import CanvaConnection
-
-    conn = CanvaConnection.objects.first()
-
-    if not conn or not conn.access_token:
-        return Response({"error": "❌ No Canva connection found"})
-
-    webhook_url = f"{settings.NGROK_URL}/api/canva/webhook/"
-
-    headers = {
-        "Authorization": f"Bearer {conn.access_token}",
-        "Content-Type": "application/json"
-    }
-
-    # =========================
-    # 🔍 STEP 1: CHECK EXISTING WEBHOOKS
-    # =========================
-    try:
-        existing_res = requests.get(
-            "https://api.canva.com/rest/v1/webhooks",
-            headers=headers
-        )
-
-        if existing_res.ok:
-            existing_hooks = existing_res.json()
-
-            for hook in existing_hooks:
-                if hook.get("url") == webhook_url:
-                    return Response({
-                        "status": "already_exists",
-                        "message": "✅ Webhook already registered",
-                        "webhook": hook
-                    })
-
-    except Exception as e:
-        return Response({
-            "error": f"❌ Failed to check existing webhooks: {str(e)}"
-        })
-
-    # =========================
-    # 🚀 STEP 2: REGISTER NEW WEBHOOK
-    # =========================
-    data = {
-        "url": webhook_url,
-        "events": ["design.exported"]
-    }
-
-    try:
-        res = requests.post(
-            "https://api.canva.com/rest/v1/webhooks",
-            json=data,
-            headers=headers
-        )
-
-        if res.ok:
-            return Response({
-                "status": "created",
-                "message": "🎉 Webhook registered successfully",
-                "data": res.json()
-            })
-        else:
-            return Response({
-                "status": "failed",
-                "error": res.text,
-                "status_code": res.status_code
-            })
-
-    except Exception as e:
-        return Response({
-            "error": f"❌ Webhook registration failed: {str(e)}"
-        })
