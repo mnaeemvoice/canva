@@ -35,6 +35,12 @@ class CanvaDesign(models.Model):
     # full Canva API response
     raw_data = models.JSONField(null=True, blank=True)
 
+    # 🔥 NEW: Track last modified time from Canva
+    last_modified = models.DateTimeField(null=True, blank=True)
+
+    # 🔥 NEW: Track if preview is ready for display
+    preview_ready = models.BooleanField(default=False)
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
