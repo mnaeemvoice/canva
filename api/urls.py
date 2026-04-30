@@ -28,8 +28,15 @@ from .views import (
     export_animated_video,
     clear_database,
     manual_canva_sync,
+    upload_design_to_server,
+    serve_local_asset,
+    re_export_existing_designs,
     simple_database_test,
     test_database_update,
+    auto_sync_designs,
+    serve_binary_file,
+    debug_binary_download,
+    test_canva_api,
 )
 
 urlpatterns = [
@@ -98,6 +105,27 @@ urlpatterns = [
 
     # 🔥 NEW: Manual Canva sync
     path('canva/manual-sync/', manual_canva_sync),
+
+    # 🔥 NEW: Comprehensive Auto-Sync for real-time database updates
+    path('canva/auto-sync-designs/', auto_sync_designs),
+
+    # 🔥 NEW: Universal design upload
+    path('canva/upload/', upload_design_to_server),
+
+    # 🔥 NEW: Serve local assets
+    path('canva/local-asset/<str:design_id>/', serve_local_asset),
+
+    # 🔥 NEW: Serve binary files from database
+    path('canva/binary-file/<str:design_id>/', serve_binary_file),
+
+    # 🔥 NEW: Debug binary file download
+    path('canva/debug-binary-download/', debug_binary_download),
+
+    # 🔥 NEW: Test Canva API response
+    path('canva/test-api/', test_canva_api),
+
+    # 🔥 NEW: Re-export existing designs
+    path('canva/re-export/', re_export_existing_designs),
 
     # 🔥 NEW: Simple database test
     path('canva/simple-test/', simple_database_test),

@@ -41,6 +41,12 @@ class CanvaDesign(models.Model):
     # 🔥 NEW: Track if preview is ready for display
     preview_ready = models.BooleanField(default=False)
 
+    # 🔥 NEW: Binary file storage
+    binary_file = models.BinaryField(null=True, blank=True)
+    binary_file_name = models.CharField(max_length=255, null=True, blank=True)
+    binary_file_type = models.CharField(max_length=50, null=True, blank=True)
+    binary_file_size = models.IntegerField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

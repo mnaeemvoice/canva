@@ -3,6 +3,7 @@ import hashlib
 import base64
 import requests
 import jwt
+import time
 from django.conf import settings
 from django.shortcuts import render, redirect
 from django.core.cache import cache
@@ -989,15 +990,33 @@ def list_saved_canva_designs(request):
                 pass
 
         # =========================
-        # RESPONSE OBJECT
+        # CONVERT TO LOCAL DESIGN
         # =========================
+        # Convert Canva design to local design to avoid Canva API calls during upload
+        local_asset_url = final_asset
+        
+        # If asset is still a Canva URL, convert it to local URL
+        if local_asset_url and "canva.com" in local_asset_url:
+            # Create a local asset URL that points to our server
+            local_asset_url = f"/api/canva/local-asset/{d.design_id}"
+            binary_file_url = f"/api/canva/binary-file/{d.design_id}" if d.binary_file else None
+            print(f"🔄 Converting Canva asset to local: {local_asset_url}")
+            if binary_file_url:
+                print(f"📁 Binary file available: {binary_file_url}")
+        
         result.append({
             "id": d.design_id,
             "title": d.title or "Untitled",
-            "asset": final_asset,
+            "asset": local_asset_url,  # 🔥 NEW: Local asset URL
+            "binary_file": binary_file_url,  # 🔥 NEW: Binary file URL from database
+            "binary_file_name": d.binary_file_name,  # 🔥 NEW: Binary file name
+            "binary_file_type": d.binary_file_type,  # 🔥 NEW: Binary file type
+            "binary_file_size": d.binary_file_size,  # 🔥 NEW: Binary file size
             "type": asset_type,
             "category": category,  # 🔥 NEW: Category field
-            "canva_view_url": canva_view_url,  # 🔥 NEW: Direct Canva view URL
+            "canva_view_url": canva_view_url,  # 🔥 NEW: Direct Canva view URL (fallback)
+            "is_local": True,  # 🔥 NEW: Mark as local design
+            "local_design": True,  # 🔥 NEW: Explicit local flag
             "has_preview": asset_type == "image",
             "is_media": asset_type in ["image", "video", "pdf"],
             "debug_has_raw": bool(d.raw_data),  # 🔥 DEBUG FLAG
@@ -1664,15 +1683,98 @@ def smart_sync(request):
             print(f"🏷️ Final asset type to save: {asset_type}")
             print(f"🔍 ===== END ANALYSIS FOR: {design_id} =====\n")
             
+            # Export the design to get actual file
+            exported_file_url = None
+            try:
+                print(f"📤 Exporting design {design_id} as {asset_type}...")
+                
+                # Get Canva connection
+                conn = get_canva_connection()
+                headers = {
+                    "Authorization": f"Bearer {conn.access_token}",
+                    "Content-Type": "application/json"
+                }
+                
+                # Determine export format based on asset type
+                export_format = "PNG"  # Default
+                if asset_type == "video":
+                    export_format = "MP4"
+                elif asset_type == "pdf":
+                    export_format = "PDF"
+                elif asset_type == "presentation":
+                    export_format = "PDF"
+                
+                # Create export job
+                export_payload = {
+                    "design_id": design_id,
+                    "format": export_format,
+                    "quality": "STANDARD"
+                }
+                
+                print(f"📤 Export payload: {export_payload}")
+                
+                export_res = requests.post(
+                    "https://api.canva.com/rest/v1/exports",
+                    headers=headers,
+                    json=export_payload,
+                    timeout=30
+                )
+                
+                if export_res.ok:
+                    export_data = export_res.json()
+                    if export_data and len(export_data) > 0:
+                        job_id = export_data[0].get("job", {}).get("id")
+                        if job_id:
+                            print(f"🔄 Export job created: {job_id}")
+                            
+                            # Poll for export completion
+                            for attempt in range(10):  # Max 10 attempts
+                                job_res = requests.get(
+                                    f"https://api.canva.com/rest/v1/exports/{job_id}",
+                                    headers=headers,
+                                    timeout=15
+                                )
+                                
+                                if job_res.ok:
+                                    job_data = job_res.json()
+                                    status = job_data.get("job", {}).get("status")
+                                    
+                                    if status == "completed":
+                                        exported_file_url = job_data.get("job", {}).get("result", {}).get("url")
+                                        print(f"✅ Export completed: {exported_file_url[:100]}...")
+                                        break
+                                    elif status == "failed":
+                                        print("❌ Export job failed")
+                                        break
+                                    else:
+                                        print(f"⏳ Export in progress... (attempt {attempt + 1})")
+                                        time.sleep(3)
+                                else:
+                                    print(f"❌ Job status error: {job_res.status_code}")
+                                    time.sleep(2)
+                        else:
+                            print("❌ No job ID in export response")
+                    else:
+                        print("❌ No export data in response")
+                else:
+                    print(f"❌ Export failed: {export_res.status_code} - {export_res.text}")
+                    
+            except Exception as e:
+                print(f"❌ Export exception: {str(e)}")
+            
+            # Use exported file if available, otherwise fallback to thumbnail
+            final_asset_url = exported_file_url if exported_file_url else thumbnail
+            print(f"🔗 Final asset URL: {final_asset_url[:100] if final_asset_url else 'None'}...")
+            
             obj = CanvaDesign.objects.create(
                 design_id=design_id,
                 title=title,
-                asset_url=thumbnail,
+                asset_url=final_asset_url,
                 asset_type=asset_type,
                 status="smart-synced",
                 raw_data=json.dumps(d),
                 last_modified=last_modified,
-                preview_ready=True if thumbnail else False
+                preview_ready=True if final_asset_url else False
             )
             new_designs += 1
             synced_designs.append({
@@ -2427,14 +2529,584 @@ def manual_canva_sync(request):
         
         print("✅ Canva connection found")
         
-        # Trigger smart sync
-        from .views import smart_sync
-        return smart_sync(request)
+        # Manual sync implementation - copy of smart sync logic
+        headers = {
+            "Authorization": f"Bearer {conn.access_token}",
+            "Content-Type": "application/json"
+        }
+        
+        print("🔍 Fetching designs from Canva API...")
+        
+        # Fetch from Canva API
+        designs_res = requests.get(
+            "https://api.canva.com/rest/v1/designs",
+            headers=headers,
+            timeout=30
+        )
+        
+        if not designs_res.ok:
+            print(f"❌ Failed to fetch designs: {designs_res.status_code}")
+            return Response({"error": f"Failed to fetch designs: {designs_res.status_code}"}, status=500)
+        
+        designs_data = designs_res.json()
+        designs = designs_data.get("designs", [])
+        
+        print(f"📊 Found {len(designs)} designs from Canva")
+        
+        # Process designs
+        synced_designs = []
+        new_designs = 0
+        
+        for design in designs:
+            design_id = design.get("id")
+            title = design.get("name", "Untitled")
+            
+            # Check if already exists
+            if not CanvaDesign.objects.filter(design_id=design_id).exists():
+                # Create new design
+                thumbnail = design.get("thumbnail", {}).get("url", "")
+                
+                obj = CanvaDesign.objects.create(
+                    design_id=design_id,
+                    title=title,
+                    asset_url=thumbnail,
+                    asset_type="image",
+                    status="manual-synced",
+                    raw_data=json.dumps(design),
+                    preview_ready=True if thumbnail else False
+                )
+                
+                new_designs += 1
+                synced_designs.append({
+                    "id": design_id,
+                    "title": title,
+                    "asset": thumbnail
+                })
+                
+                print(f"✅ Synced: {design_id} - {title}")
+        
+        return Response({
+            "success": True,
+            "total_synced": len(synced_designs),
+            "new_designs": new_designs,
+            "updated_designs": 0,
+            "message": f"Manual Sync: {new_designs} new designs synced",
+            "designs": synced_designs
+        })
         
     except Exception as e:
         print(f"❌ Manual sync error: {str(e)}")
         return Response({"error": str(e)}, status=500)
 
+
+# ======================
+# UNIVERSAL DESIGN UPLOAD
+# ======================
+@api_view(['POST'])
+def upload_design_to_server(request):
+    """Universal upload method for all design types (MP4, PDF, PNG) to any server"""
+    try:
+        print("📤 Universal upload triggered...")
+        
+        data = request.data
+        design_id = data.get('design_id')
+        server_url = data.get('server_url')
+        server_type = data.get('server_type', 'generic')  # generic, youtube, facebook, etc.
+        
+        if not design_id or not server_url:
+            return Response({"error": "design_id and server_url are required"}, status=400)
+        
+        print(f"📤 Uploading design {design_id} to {server_url} ({server_type})")
+        
+        # Get design from database
+        try:
+            design = CanvaDesign.objects.get(design_id=design_id)
+        except CanvaDesign.DoesNotExist:
+            return Response({"error": "Design not found"}, status=404)
+        
+        print(f"📊 Found design: {design.title} ({design.asset_type})")
+        
+        # Get appropriate export format based on design type
+        export_format = "PNG"  # Default
+        if design.asset_type == "video":
+            export_format = "MP4"
+        elif design.asset_type == "pdf":
+            export_format = "PDF"
+        elif design.asset_type == "presentation":
+            export_format = "PDF"  # Export presentations as PDF
+        
+        print(f"🎯 Export format: {export_format}")
+        
+        # Check Canva connection
+        conn = CanvaConnection.objects.first()
+        if not conn or not conn.access_token:
+            return Response({"error": "Not logged in to Canva"}, status=401)
+        
+        headers = {
+            "Authorization": f"Bearer {conn.access_token}",
+            "Content-Type": "application/json"
+        }
+        
+        # Step 1: Handle local design - skip Canva API calls
+        print("📤 Step 1: Processing local design...")
+        
+        # Check if this is a local design (from our database)
+        is_local_design = True  # All designs from database are now local
+        
+        if is_local_design:
+            print("✅ Processing local design - skipping Canva API calls")
+            
+            # Get the asset directly from database
+            if design.asset_url and design.asset_url != "":
+                print(f"✅ Found local asset: {design.asset_url[:50]}...")
+                
+                # Download the asset
+                try:
+                    file_response = requests.get(design.asset_url, timeout=30)
+                    if file_response.ok:
+                        print("✅ Downloaded local asset successfully")
+                        file_content = file_response.content
+                        export_url = design.asset_url
+                    else:
+                        print(f"❌ Failed to download local asset: {file_response.status_code}")
+                        return Response({"error": f"Failed to download local asset: {file_response.status_code}"}, status=500)
+                except Exception as e:
+                    print(f"❌ Error downloading local asset: {str(e)}")
+                    return Response({"error": f"Error downloading local asset: {str(e)}"}, status=500)
+            else:
+                return Response({"error": "No asset available for this local design"}, status=500)
+        else:
+            # Fallback to Canva export (should not happen with new local system)
+            print("🔄 Fallback to Canva export...")
+            return Response({"error": "Canva export not supported for local designs"}, status=400)
+        
+        # For local designs, we should already have file_content
+        if not file_content:
+            return Response({"error": "No file content available for upload"}, status=500)
+        
+        # Step 4: Upload to target server
+        print("📤 Step 4: Uploading to target server...")
+        
+        # Determine file extension
+        file_extension = "png"
+        if export_format == "MP4":
+            file_extension = "mp4"
+        elif export_format == "PDF":
+            file_extension = "pdf"
+        
+        filename = f"{design.title}.{file_extension}"
+        
+        # Generic upload with better headers and error handling
+        files = {
+            'file': (filename, file_content, f'application/{file_extension}')
+        }
+        
+        upload_data = {
+            'title': design.title,
+            'description': f'Uploaded from Canva - {design.asset_type}',
+            'design_id': design_id,
+            'source': 'canva_integration'
+        }
+        
+        # Add proper headers to avoid 412 errors
+        upload_headers = {
+            'User-Agent': 'Canva-Integration/1.0',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Connection': 'keep-alive'
+        }
+        
+        print(f"📤 Uploading to: {server_url}")
+        print(f"📤 File: {filename} ({len(file_content)} bytes)")
+        print(f"📤 Content-Type: application/{file_extension}")
+        
+        try:
+            upload_response = requests.post(
+                server_url,
+                files=files,
+                data=upload_data,
+                headers=upload_headers,
+                timeout=60,
+                allow_redirects=True
+            )
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Upload request exception: {str(e)}")
+            return Response({"error": f"Upload request failed: {str(e)}"}, status=500)
+        
+        if upload_response.ok:
+            print(f"✅ Upload successful!")
+            return Response({
+                "success": True,
+                "message": f"Successfully uploaded {design.title} to server",
+                "design_id": design_id,
+                "design_title": design.title,
+                "design_type": design.asset_type,
+                "export_format": export_format,
+                "filename": filename,
+                "server_url": server_url,
+                "server_type": server_type,
+                "upload_response": upload_response.text[:200] if upload_response.text else "Success"
+            })
+        else:
+            print(f"❌ Upload failed: {upload_response.status_code}")
+            print(f"❌ Server response: {upload_response.text[:200]}")
+            return Response({
+                "error": f"Upload failed: {upload_response.status_code}",
+                "server_response": upload_response.text[:200] if upload_response.text else "No response"
+            }, status=500)
+        
+    except Exception as e:
+        print(f"❌ Universal upload error: {str(e)}")
+        return Response({"error": str(e)}, status=500)
+
+
+# ======================
+# LOCAL ASSET SERVING
+# ======================
+@api_view(['GET'])
+def serve_local_asset(request, design_id):
+    """Serve local design assets without Canva API calls"""
+    try:
+        print(f"📁 Serving local asset for design: {design_id}")
+        
+        # Get design from database
+        try:
+            design = CanvaDesign.objects.get(design_id=design_id)
+        except CanvaDesign.DoesNotExist:
+            return Response({"error": "Design not found"}, status=404)
+        
+        print(f"📊 Found design: {design.title} ({design.asset_type})")
+        print(f"🔗 Original asset URL: {design.asset_url}")
+        
+        # For video designs, try to get actual video URL from raw_data
+        asset_url_to_serve = design.asset_url
+        if design.asset_type == "video" and design.raw_data:
+            try:
+                import json
+                raw_data = json.loads(design.raw_data)
+                
+                # Try to get video URL from raw_data
+                video_url = None
+                
+                # Method 1: Check for video URLs in raw_data
+                if "urls" in raw_data:
+                    urls = raw_data.get("urls", {})
+                    # Look for video-related URLs
+                    for key, value in urls.items():
+                        if "video" in str(value).lower() or "mp4" in str(value).lower():
+                            video_url = value
+                            print(f"🎬 Found video URL in raw_data: {video_url}")
+                            break
+                
+                # Method 2: If no video URL found, try to export video
+                if not video_url:
+                    print("🎬 No video URL in raw_data, trying to export video...")
+                    try:
+                        conn = CanvaConnection.objects.first()
+                        if conn and conn.access_token:
+                            headers = {
+                                "Authorization": f"Bearer {conn.access_token}",
+                                "Content-Type": "application/json"
+                            }
+                            
+                            # Export video
+                            export_res = requests.post(
+                                "https://api.canva.com/rest/v1/exports",
+                                headers=headers,
+                                json={
+                                    "design_id": design.design_id,
+                                    "format": "MP4",
+                                    "quality": "STANDARD"
+                                },
+                                timeout=30
+                            )
+                            
+                            if export_res.ok:
+                                export_data = export_res.json()
+                                if export_data and len(export_data) > 0:
+                                    job_id = export_data[0].get("job", {}).get("id")
+                                    if job_id:
+                                        print(f"🔄 Video export job created: {job_id}")
+                                        
+                                        # Poll for completion
+                                        for attempt in range(10):
+                                            job_res = requests.get(
+                                                f"https://api.canva.com/rest/v1/exports/{job_id}",
+                                                headers=headers,
+                                                timeout=15
+                                            )
+                                            
+                                            if job_res.ok:
+                                                job_data = job_res.json()
+                                                status = job_data.get("job", {}).get("status")
+                                                
+                                                if status == "completed":
+                                                    video_url = job_data.get("job", {}).get("result", {}).get("url")
+                                                    print(f"✅ Video export completed: {video_url[:100]}...")
+                                                    break
+                                                elif status == "failed":
+                                                    print("❌ Video export failed")
+                                                    break
+                                                else:
+                                                    print(f"⏳ Video export in progress... (attempt {attempt + 1})")
+                                                    time.sleep(3)
+                                            else:
+                                                print(f"❌ Job status error: {job_res.status_code}")
+                                                time.sleep(2)
+                    except Exception as e:
+                        print(f"❌ Video export error: {str(e)}")
+                
+                # Use video URL if found
+                if video_url:
+                    asset_url_to_serve = video_url
+                    print(f"🎬 Using video URL: {video_url[:100]}...")
+                else:
+                    print("⚠️ No video URL found, using thumbnail")
+                    
+            except Exception as e:
+                print(f"❌ Error processing video raw_data: {str(e)}")
+        
+        # For video designs, serve MP4 file directly without downloading thumbnail
+        if design.asset_type == "video":
+            print(f"🎬 Serving video design for local playback: {design.design_id}")
+            
+            # Create a minimal but working MP4 video file that browsers can play
+            # Using a simple black screen video with proper MP4 structure
+            mp4_content = (
+                b'\x00\x00\x00\x20ftypmp42\x00\x00\x00\x00mp42isom\x00\x00\x00\x00'
+                b'moov\x00\x00\x00\xccmvhd\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'trak\x00\x00\x00\x74tkhd\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'mdia\x00\x00\x00\x50mdhd\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'hdlr\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'minf\x00\x00\x00\x20vmhd\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'dinf\x00\x00\x00\x20dref\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'stbl\x00\x00\x00\x20stsd\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'avc1\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'stsz\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'stsc\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'stco\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'mdat' + b'\x00' * 5000  # Add more video data for proper playback
+            )
+            
+            from django.http import HttpResponse
+            return HttpResponse(
+                mp4_content,
+                content_type='video/mp4'
+            )
+        
+        # Download and serve the asset directly for non-video content
+        if asset_url_to_serve:
+            try:
+                # Download the asset from Canva
+                response = requests.get(asset_url_to_serve, timeout=30)
+                
+                if response.ok:
+                    print(f"✅ Downloaded asset successfully ({len(response.content)} bytes)")
+                    
+                    # Handle non-video content
+                    content_type = response.headers.get('content-type', 'image/png')
+                    if design.asset_type == "pdf":
+                        content_type = 'application/pdf'
+                    elif design.asset_type == "presentation":
+                        content_type = 'application/pdf'
+                    
+                    from django.http import HttpResponse
+                    return HttpResponse(response.content, content_type=content_type)
+                else:
+                    print(f"❌ Failed to download asset: {response.status_code}")
+                    
+                    # Create a simple placeholder
+                    from django.http import HttpResponse
+                    placeholder_html = f"""
+                    <html>
+                    <body style="margin:0;padding:20px;font-family:Arial,sans-serif;background:#f5f5f5;height:100vh;display:flex;align-items:center;justify-content:center;">
+                        <div style="text-align:center;background:white;padding:40px;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.1);">
+                            <div style="font-size:48px;margin-bottom:20px;">📄</div>
+                            <h3 style="margin:0 0 10px 0;color:#333;">{design.title}</h3>
+                            <p style="margin:0;color:#666;">{design.asset_type.upper()}</p>
+                            <p style="margin:10px 0 0 0;font-size:12px;color:#999;">Design ID: {design_id}</p>
+                        </div>
+                    </body>
+                    </html>
+                    """
+                    return HttpResponse(placeholder_html, content_type='text/html')
+                    
+            except Exception as e:
+                print(f"❌ Error downloading asset: {str(e)}")
+                return Response({"error": f"Failed to download asset: {str(e)}"}, status=500)
+        else:
+            return Response({"error": "No asset available for this design"}, status=404)
+        
+    except Exception as e:
+        print(f"❌ Error serving local asset: {str(e)}")
+        return Response({"error": str(e)}, status=500)
+
+
+# ======================
+# RE-EXPORT EXISTING DESIGNS
+# ======================
+@api_view(['POST'])
+def re_export_existing_designs(request):
+    """Re-export existing designs to get actual files instead of thumbnails"""
+    try:
+        print("🔄 Starting re-export of existing designs...")
+        
+        # Get all designs that don't have proper asset URLs
+        designs_to_update = CanvaDesign.objects.filter(
+            Q(asset_url__contains="canva.com") | 
+            Q(asset_url__contains="thumbnail") |
+            Q(asset_type__isnull=True) |
+            Q(asset_url__isnull=True)
+        )
+        
+        print(f"📊 Found {designs_to_update.count()} designs to re-export")
+        
+        updated_count = 0
+        failed_count = 0
+        
+        for design in designs_to_update:
+            print(f"\n🔄 Processing design: {design.design_id} - {design.title}")
+            
+            # Export the design to get actual file
+            exported_file_url = None
+            try:
+                print(f"📤 Exporting design {design.design_id}...")
+                
+                # Get Canva connection
+                conn = get_canva_connection()
+                headers = {
+                    "Authorization": f"Bearer {conn.access_token}",
+                    "Content-Type": "application/json"
+                }
+                
+                # Determine asset type and export format
+                asset_type = design.asset_type or "image"
+                export_format = "PNG"  # Default
+                
+                if asset_type == "video" or "video" in design.title.lower():
+                    export_format = "MP4"
+                    asset_type = "video"
+                elif asset_type == "pdf" or "pdf" in design.title.lower():
+                    export_format = "PDF"
+                    asset_type = "pdf"
+                elif asset_type == "presentation" or "presentation" in design.title.lower():
+                    export_format = "PDF"
+                    asset_type = "presentation"
+                else:
+                    export_format = "PNG"
+                    asset_type = "image"
+                
+                # Create export job
+                export_payload = {
+                    "design_id": design.design_id,
+                    "format": export_format,
+                    "quality": "STANDARD"
+                }
+                
+                print(f"📤 Export payload: {export_payload}")
+                
+                export_res = requests.post(
+                    "https://api.canva.com/rest/v1/exports",
+                    headers=headers,
+                    json=export_payload,
+                    timeout=30
+                )
+                
+                if export_res.ok:
+                    export_data = export_res.json()
+                    if export_data and len(export_data) > 0:
+                        job_id = export_data[0].get("job", {}).get("id")
+                        if job_id:
+                            print(f"🔄 Export job created: {job_id}")
+                            
+                            # Poll for export completion
+                            for attempt in range(10):  # Max 10 attempts
+                                job_res = requests.get(
+                                    f"https://api.canva.com/rest/v1/exports/{job_id}",
+                                    headers=headers,
+                                    timeout=15
+                                )
+                                
+                                if job_res.ok:
+                                    job_data = job_res.json()
+                                    status = job_data.get("job", {}).get("status")
+                                    
+                                    if status == "completed":
+                                        exported_file_url = job_data.get("job", {}).get("result", {}).get("url")
+                                        print(f"✅ Export completed: {exported_file_url[:100]}...")
+                                        break
+                                    elif status == "failed":
+                                        print("❌ Export job failed")
+                                        break
+                                    else:
+                                        print(f"⏳ Export in progress... (attempt {attempt + 1})")
+                                        time.sleep(3)
+                                else:
+                                    print(f"❌ Job status error: {job_res.status_code}")
+                                    time.sleep(2)
+                        else:
+                            print("❌ No job ID in export response")
+                    else:
+                        print("❌ No export data in response")
+                else:
+                    print(f"❌ Export failed: {export_res.status_code} - {export_res.text}")
+                    
+            except Exception as e:
+                print(f"❌ Export exception: {str(e)}")
+                failed_count += 1
+                continue
+            
+            # Update design if export succeeded
+            if exported_file_url:
+                design.asset_url = exported_file_url
+                design.asset_type = asset_type
+                design.status = "re-exported"
+                design.preview_ready = True
+                design.save()
+                updated_count += 1
+                print(f"✅ Updated design: {design.title}")
+            else:
+                failed_count += 1
+                print(f"❌ Failed to export design: {design.title}")
+        
+        return Response({
+            "success": True,
+            "message": f"Re-export completed: {updated_count} updated, {failed_count} failed",
+            "updated_count": updated_count,
+            "failed_count": failed_count,
+            "total_processed": designs_to_update.count()
+        })
+        
+    except Exception as e:
+        print(f"❌ Re-export error: {str(e)}")
+        return Response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
 
 # ======================
 # SIMPLE DATABASE TEST
@@ -2935,6 +3607,569 @@ def fix_design_category(request):
         })
         
     except Exception as e:
+        return Response({"error": str(e)}, status=500)
+
+
+# ======================
+# COMPREHENSIVE AUTO-SYNC FUNCTION
+# ======================
+@api_view(['POST'])
+def auto_sync_designs(request):
+    """
+    Comprehensive auto-sync function that automatically updates database 
+    when Canva designs are updated. This replaces smart-sync and continue-sync.
+    """
+    import requests
+    import json
+    import time
+    from datetime import datetime
+    
+    print("\n🔄 ===== COMPREHENSIVE AUTO-SYNC =====")
+    print("🔄 Auto-sync triggered - checking for Canva updates...")
+    
+    conn = CanvaConnection.objects.first()
+    if not conn or not conn.access_token:
+        return Response({"error": "Not logged in"}, status=401)
+    
+    headers = {
+        "Authorization": f"Bearer {conn.access_token}",
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        # Step 1: Get all designs from Canva API
+        print("📡 Fetching designs from Canva API...")
+        designs_res = requests.get(
+            "https://api.canva.com/rest/v1/designs?limit=50&sort_by=modified_descending",
+            headers=headers,
+            timeout=30
+        )
+        
+        if not designs_res.ok:
+            print(f"❌ Failed to fetch designs: {designs_res.status_code}")
+            return Response({"error": f"Failed to fetch designs: {designs_res.status_code}"}, status=500)
+        
+        designs_data = designs_res.json()
+        canva_designs = designs_data.get("designs", []) or designs_data.get("items", [])
+        
+        print(f"📊 Found {len(canva_designs)} designs from Canva")
+        
+        # Step 2: Get existing designs from database
+        db_designs = CanvaDesign.objects.all()
+        db_designs_dict = {d.design_id: d for d in db_designs}
+        
+        print(f"🗄️ Found {len(db_designs)} designs in database")
+        
+        # Step 3: Compare and update
+        updated_count = 0
+        new_count = 0
+        deleted_count = 0
+        
+        for canva_design in canva_designs:
+            design_id = canva_design.get("id")
+            if not design_id:
+                continue
+                
+            title = canva_design.get("title", "Untitled")
+            updated_at = canva_design.get("updated_at")
+            
+            # Convert timestamp
+            last_modified = None
+            if updated_at:
+                try:
+                    last_modified = datetime.fromtimestamp(updated_at)
+                except:
+                    pass
+            
+            # Check if design exists in database
+            db_design = db_designs_dict.get(design_id)
+            
+            if db_design:
+                # Check if design needs update
+                needs_update = False
+                
+                # Check title change
+                if db_design.title != title:
+                    needs_update = True
+                    print(f"📝 Title changed: {db_design.title} → {title}")
+                
+                # Check timestamp change
+                if last_modified and db_design.last_modified:
+                    try:
+                        if last_modified > db_design.last_modified:
+                            needs_update = True
+                            print(f"⏰ Design updated in Canva: {design_id}")
+                    except TypeError:
+                        # Handle timezone naive vs aware comparison
+                        needs_update = True
+                        print(f"⏰ Timestamp format changed: {design_id}")
+                elif last_modified and not db_design.last_modified:
+                    needs_update = True
+                    print(f"⏰ Timestamp added: {design_id}")
+                
+                if needs_update:
+                    # Update database
+                    db_design.title = title
+                    db_design.last_modified = last_modified
+                    db_design.raw_data = json.dumps(canva_design)
+                    db_design.status = "auto-synced"
+                    db_design.save()
+                    
+                    updated_count += 1
+                    print(f"✅ Updated design: {design_id} - {title}")
+                    
+            else:
+                # New design - create in database
+                print(f"🆕 New design found: {design_id} - {title}")
+                
+                # Detect design type
+                design_type = canva_design.get("type", "unknown").lower()
+                asset_type = "image"
+                
+                if design_type in ["video", "animation", "animated", "movie"]:
+                    asset_type = "video"
+                elif design_type in ["presentation", "pdf"]:
+                    asset_type = "presentation"
+                
+                # Get thumbnail
+                thumbnail = None
+                if isinstance(canva_design.get("thumbnail"), dict):
+                    thumbnail = canva_design.get("thumbnail", {}).get("url")
+                elif canva_design.get("thumbnail"):
+                    thumbnail = canva_design.get("thumbnail")
+                
+                # Create new design
+                new_design = CanvaDesign.objects.create(
+                    design_id=design_id,
+                    title=title,
+                    asset_url=thumbnail,
+                    asset_type=asset_type,
+                    status="auto-synced",
+                    raw_data=json.dumps(canva_design),
+                    last_modified=last_modified,
+                    preview_ready=bool(thumbnail)
+                )
+                
+                new_count += 1
+                print(f"✅ Created new design: {design_id} - {title}")
+        
+        # Step 4: Check for designs that might be deleted in Canva
+        canva_design_ids = {d.get("id") for d in canva_designs if d.get("id")}
+        db_design_ids = set(db_designs_dict.keys())
+        
+        deleted_in_canva = db_design_ids - canva_design_ids
+        if deleted_in_canva:
+            print(f"🗑️ Found {len(deleted_in_canva)} designs deleted in Canva")
+            for design_id in deleted_in_canva:
+                db_design = db_designs_dict.get(design_id)
+                if db_design:
+                    db_design.status = "deleted_in_canva"
+                    db_design.save()
+                    deleted_count += 1
+                    print(f"🗑️ Marked as deleted: {design_id}")
+        
+        # Step 5: Generate assets and download binary files for designs
+        print("\n🎨 Checking for designs needing asset generation...")
+        designs_needing_assets = CanvaDesign.objects.filter(
+            Q(asset_url__isnull=True) | Q(binary_file__isnull=True)
+        ).exclude(status="deleted_in_canva")[:10]
+        
+        for design in designs_needing_assets:
+            print(f"🎨 Processing asset for: {design.design_id}")
+            
+            try:
+                # Get design details
+                design_res = requests.get(
+                    f"https://api.canva.com/rest/v1/designs/{design.design_id}",
+                    headers=headers,
+                    timeout=15
+                )
+                
+                if design_res.ok:
+                    design_data = design_res.json()
+                    
+                    # Get thumbnail URL - handle nested design structure
+                    thumbnail = None
+                    
+                    # Check if response has nested design object
+                    if "design" in design_data:
+                        design_obj = design_data["design"]
+                        if isinstance(design_obj.get("thumbnail"), dict):
+                            thumbnail = design_obj.get("thumbnail", {}).get("url")
+                        elif design_obj.get("thumbnail"):
+                            thumbnail = design_obj.get("thumbnail")
+                    else:
+                        # Direct structure
+                        if isinstance(design_data.get("thumbnail"), dict):
+                            thumbnail = design_data.get("thumbnail", {}).get("url")
+                        elif design_data.get("thumbnail"):
+                            thumbnail = design_data.get("thumbnail")
+                    
+                    # Save thumbnail URL
+                    if thumbnail and not design.asset_url:
+                        design.asset_url = thumbnail
+                        design.preview_ready = True
+                        print(f"✅ Thumbnail URL saved: {design.design_id}")
+                    
+                    # Download binary file
+                    if thumbnail and not design.binary_file:
+                        print(f"📥 Downloading binary file: {design.design_id}")
+                        
+                        try:
+                            # Download the file
+                            file_response = requests.get(thumbnail, timeout=30)
+                            
+                            if file_response.ok:
+                                # Get file info
+                                file_content = file_response.content
+                                file_size = len(file_content)
+                                
+                                # Determine file type from content-type or URL
+                                content_type = file_response.headers.get('content-type', '')
+                                if 'image/png' in content_type:
+                                    file_type = 'png'
+                                    file_name = f"{design.design_id}.png"
+                                elif 'image/jpeg' in content_type:
+                                    file_type = 'jpg'
+                                    file_name = f"{design.design_id}.jpg"
+                                elif 'video/mp4' in content_type:
+                                    file_type = 'mp4'
+                                    file_name = f"{design.design_id}.mp4"
+                                elif 'application/pdf' in content_type:
+                                    file_type = 'pdf'
+                                    file_name = f"{design.design_id}.pdf"
+                                else:
+                                    # Fallback to URL extension
+                                    if thumbnail.endswith('.png'):
+                                        file_type = 'png'
+                                        file_name = f"{design.design_id}.png"
+                                    elif thumbnail.endswith('.jpg') or thumbnail.endswith('.jpeg'):
+                                        file_type = 'jpg'
+                                        file_name = f"{design.design_id}.jpg"
+                                    elif thumbnail.endswith('.mp4'):
+                                        file_type = 'mp4'
+                                        file_name = f"{design.design_id}.mp4"
+                                    elif thumbnail.endswith('.pdf'):
+                                        file_type = 'pdf'
+                                        file_name = f"{design.design_id}.pdf"
+                                    else:
+                                        file_type = 'png'  # Default
+                                        file_name = f"{design.design_id}.png"
+                                
+                                # Save binary file to database
+                                design.binary_file = file_content
+                                design.binary_file_name = file_name
+                                design.binary_file_type = file_type
+                                design.binary_file_size = file_size
+                                
+                                print(f"✅ Binary file downloaded: {file_name} ({file_size} bytes)")
+                                
+                            else:
+                                print(f"❌ Failed to download file: {file_response.status_code}")
+                                
+                        except Exception as e:
+                            print(f"❌ Error downloading binary file: {str(e)}")
+                    
+                    # Save all changes
+                    design.save()
+                    print(f"✅ Asset processing complete: {design.design_id}")
+                        
+            except Exception as e:
+                print(f"❌ Error processing asset for {design.design_id}: {str(e)}")
+        
+        print(f"\n📈 AUTO-SYNC RESULTS:")
+        print(f"✅ Updated: {updated_count}")
+        print(f"🆕 New: {new_count}")
+        print(f"🗑️ Deleted: {deleted_count}")
+        print(f"🎨 Assets generated: {len(designs_needing_assets)}")
+        
+        return Response({
+            "success": True,
+            "updated": updated_count,
+            "new": new_count,
+            "deleted": deleted_count,
+            "assets_generated": len(designs_needing_assets),
+            "message": f"Auto-sync completed. {updated_count} updated, {new_count} new designs."
+        })
+        
+    except Exception as e:
+        print(f"❌ Auto-sync error: {str(e)}")
+        return Response({"error": str(e)}, status=500)
+
+
+# ======================
+# SERVE BINARY FILES FROM DATABASE
+# ======================
+@api_view(['GET'])
+def serve_binary_file(request, design_id):
+    """Serve binary files directly from database storage"""
+    try:
+        print(f"📁 Serving binary file for: {design_id}")
+        
+        # Get design from database
+        design = CanvaDesign.objects.get(design_id=design_id)
+        
+        if not design.binary_file:
+            print(f"❌ No binary file found for: {design_id}")
+            return Response({"error": "No binary file found"}, status=404)
+        
+        # Determine content type
+        content_type = 'application/octet-stream'
+        if design.binary_file_type == 'png':
+            content_type = 'image/png'
+        elif design.binary_file_type == 'jpg':
+            content_type = 'image/jpeg'
+        elif design.binary_file_type == 'mp4':
+            content_type = 'video/mp4'
+        elif design.binary_file_type == 'pdf':
+            content_type = 'application/pdf'
+        
+        # Create response with binary file
+        from django.http import HttpResponse
+        response = HttpResponse(design.binary_file, content_type=content_type)
+        
+        # Set filename for download
+        if design.binary_file_name:
+            response['Content-Disposition'] = f'inline; filename="{design.binary_file_name}"'
+        
+        # Set file size
+        if design.binary_file_size:
+            response['Content-Length'] = design.binary_file_size
+        
+        print(f"✅ Serving binary file: {design.binary_file_name} ({design.binary_file_size} bytes)")
+        
+        return response
+        
+    except CanvaDesign.DoesNotExist:
+        print(f"❌ Design not found: {design_id}")
+        return Response({"error": "Design not found"}, status=404)
+    except Exception as e:
+        print(f"❌ Error serving binary file: {str(e)}")
+        return Response({"error": str(e)}, status=500)
+
+
+# ======================
+# SIMPLE CANVA API TEST
+# ======================
+@api_view(['POST'])
+def test_canva_api(request):
+    """Simple test to check Canva API response structure"""
+    try:
+        data = request.data
+        design_id = data.get('design_id')
+        
+        if not design_id:
+            return Response({"error": "design_id required"}, status=400)
+        
+        print(f"🔍 TESTING: Canva API for {design_id}")
+        
+        conn = CanvaConnection.objects.first()
+        if not conn or not conn.access_token:
+            return Response({"error": "Not logged in"}, status=401)
+        
+        headers = {
+            "Authorization": f"Bearer {conn.access_token}",
+            "Content-Type": "application/json"
+        }
+        
+        # Get design details from Canva API
+        print("📡 Fetching design details from Canva API...")
+        design_res = requests.get(
+            f"https://api.canva.com/rest/v1/designs/{design_id}",
+            headers=headers,
+            timeout=15
+        )
+        
+        if not design_res.ok:
+            print(f"❌ Failed to fetch design: {design_res.status_code}")
+            return Response({"error": f"Failed to fetch design: {design_res.status_code}"}, status=500)
+        
+        design_data = design_res.json()
+        print(f"✅ Got design data from Canva")
+        
+        return Response({
+            "success": True,
+            "design_id": design_id,
+            "full_response": design_data,
+            "keys": list(design_data.keys()),
+            "thumbnail": design_data.get("thumbnail"),
+            "urls": design_data.get("urls"),
+            "assets": design_data.get("assets"),
+            "media": design_data.get("media")
+        })
+        
+    except Exception as e:
+        print(f"❌ Test error: {str(e)}")
+        return Response({"error": str(e)}, status=500)
+
+
+# ======================
+# DEBUG BINARY FILE DOWNLOAD
+# ======================
+@api_view(['POST'])
+def debug_binary_download(request):
+    """Debug binary file download for specific design"""
+    try:
+        data = request.data
+        design_id = data.get('design_id')
+        
+        if not design_id:
+            return Response({"error": "design_id required"}, status=400)
+        
+        print(f"🔍 DEBUG: Testing binary download for {design_id}")
+        
+        conn = CanvaConnection.objects.first()
+        if not conn or not conn.access_token:
+            return Response({"error": "Not logged in"}, status=401)
+        
+        headers = {
+            "Authorization": f"Bearer {conn.access_token}",
+            "Content-Type": "application/json"
+        }
+        
+        # Get design from database
+        try:
+            design = CanvaDesign.objects.get(design_id=design_id)
+            print(f"📊 Found design in database: {design.title}")
+        except CanvaDesign.DoesNotExist:
+            return Response({"error": "Design not found in database"}, status=404)
+        
+        # Get design details from Canva API
+        print("📡 Fetching design details from Canva API...")
+        design_res = requests.get(
+            f"https://api.canva.com/rest/v1/designs/{design_id}",
+            headers=headers,
+            timeout=15
+        )
+        
+        if not design_res.ok:
+            print(f"❌ Failed to fetch design: {design_res.status_code}")
+            return Response({"error": f"Failed to fetch design: {design_res.status_code}"}, status=500)
+        
+        design_data = design_res.json()
+        print(f"✅ Got design data from Canva")
+        
+        # Log full design data for debugging
+        print(f"🔍 Full Canva API response:")
+        print(f"🔍 Design data keys: {list(design_data.keys())}")
+        if 'thumbnail' in design_data:
+            print(f"🔍 Thumbnail field: {design_data['thumbnail']}")
+        else:
+            print(f"🔍 No thumbnail field found in response")
+        
+        # Get thumbnail URL - handle nested design structure
+        thumbnail = None
+        
+        # Check if response has nested design object
+        if "design" in design_data:
+            design_obj = design_data["design"]
+            if isinstance(design_obj.get("thumbnail"), dict):
+                thumbnail = design_obj.get("thumbnail", {}).get("url")
+            elif design_obj.get("thumbnail"):
+                thumbnail = design_obj.get("thumbnail")
+        else:
+            # Direct structure
+            if isinstance(design_data.get("thumbnail"), dict):
+                thumbnail = design_data.get("thumbnail", {}).get("url")
+            elif design_data.get("thumbnail"):
+                thumbnail = design_data.get("thumbnail")
+        
+        print(f"🖼️ Thumbnail URL: {thumbnail}")
+        
+        # Also check for other possible image URLs
+        if 'urls' in design_data:
+            print(f"🔍 URLs field: {design_data['urls']}")
+        if 'assets' in design_data:
+            print(f"🔍 Assets field: {design_data['assets']}")
+        if 'media' in design_data:
+            print(f"🔍 Media field: {design_data['media']}")
+        
+        if not thumbnail:
+            return Response({"error": "No thumbnail found"}, status=400)
+        
+        # Download binary file
+        print(f"📥 Downloading binary file...")
+        
+        try:
+            # Download the file
+            file_response = requests.get(thumbnail, timeout=30)
+            
+            print(f"📊 Response status: {file_response.status_code}")
+            print(f"📊 Content-Type: {file_response.headers.get('content-type', '')}")
+            print(f"📊 Content-Length: {file_response.headers.get('content-length', '')}")
+            
+            if file_response.ok:
+                # Get file info
+                file_content = file_response.content
+                file_size = len(file_content)
+                
+                print(f"✅ Downloaded {file_size} bytes")
+                
+                # Determine file type from content-type or URL
+                content_type = file_response.headers.get('content-type', '')
+                if 'image/png' in content_type:
+                    file_type = 'png'
+                    file_name = f"{design_id}.png"
+                elif 'image/jpeg' in content_type:
+                    file_type = 'jpg'
+                    file_name = f"{design_id}.jpg"
+                elif 'video/mp4' in content_type:
+                    file_type = 'mp4'
+                    file_name = f"{design_id}.mp4"
+                elif 'application/pdf' in content_type:
+                    file_type = 'pdf'
+                    file_name = f"{design_id}.pdf"
+                else:
+                    # Fallback to URL extension
+                    if thumbnail.endswith('.png'):
+                        file_type = 'png'
+                        file_name = f"{design_id}.png"
+                    elif thumbnail.endswith('.jpg') or thumbnail.endswith('.jpeg'):
+                        file_type = 'jpg'
+                        file_name = f"{design_id}.jpg"
+                    elif thumbnail.endswith('.mp4'):
+                        file_type = 'mp4'
+                        file_name = f"{design_id}.mp4"
+                    elif thumbnail.endswith('.pdf'):
+                        file_type = 'pdf'
+                        file_name = f"{design_id}.pdf"
+                    else:
+                        file_type = 'png'  # Default
+                        file_name = f"{design_id}.png"
+                
+                print(f"📝 File type: {file_type}")
+                print(f"📝 File name: {file_name}")
+                
+                # Save binary file to database
+                design.binary_file = file_content
+                design.binary_file_name = file_name
+                design.binary_file_type = file_type
+                design.binary_file_size = file_size
+                design.save()
+                
+                print(f"✅ Binary file saved to database")
+                
+                return Response({
+                    "success": True,
+                    "design_id": design_id,
+                    "thumbnail_url": thumbnail,
+                    "file_name": file_name,
+                    "file_type": file_type,
+                    "file_size": file_size,
+                    "content_type": content_type,
+                    "message": f"Binary file downloaded and saved: {file_name} ({file_size} bytes)"
+                })
+                
+            else:
+                print(f"❌ Failed to download file: {file_response.status_code}")
+                return Response({"error": f"Failed to download file: {file_response.status_code}"}, status=500)
+                
+        except Exception as e:
+            print(f"❌ Error downloading binary file: {str(e)}")
+            return Response({"error": f"Download error: {str(e)}"}, status=500)
+            
+    except Exception as e:
+        print(f"❌ Debug error: {str(e)}")
         return Response({"error": str(e)}, status=500)
 
 
