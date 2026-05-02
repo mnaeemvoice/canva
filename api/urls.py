@@ -37,6 +37,27 @@ from .views import (
     serve_binary_file,
     debug_binary_download,
     test_canva_api,
+    play_in_vlc,
+    upload_to_live_server,
+    export_video_for_sharing,
+    download_actual_video_file,
+    check_canva_auth,
+    list_designs_from_db,
+    get_design_details,
+    convert_to_private_designs,
+    export_private_design,
+    upload_private_design,
+    social_auth_status,
+    social_auth_save,
+    social_auth_disconnect,
+    unified_post_content,
+    list_posted_content,
+    get_posted_content,
+    export_video_alternative,
+    get_video_download_info,
+    download_and_upload_video,
+    upload_video_to_platform,
+    share_video_direct,
 )
 
 urlpatterns = [
@@ -123,6 +144,56 @@ urlpatterns = [
 
     # 🔥 NEW: Test Canva API response
     path('canva/test-api/', test_canva_api),
+
+    # 🔥 NEW: Play in VLC media player
+    path('canva/play-in-vlc/', play_in_vlc),
+
+    # 🔥 NEW: Upload to live server
+    path('canva/upload-live/', upload_to_live_server),
+
+    # 🔥 NEW: Export video for sharing
+    path('canva/export-video/', export_video_for_sharing),
+
+    # 🔥 NEW: Fixed video export with proper Canva API flow
+    path('canva/export-video-fixed/', export_video_for_sharing),
+
+    # 🔥 NEW: Alternative video export (bypass rate limiting)
+    path('canva/export-video-alternative/', export_video_alternative),
+    path('canva/video-download-info/<str:design_id>/', get_video_download_info),
+
+    # 🔥 NEW: Download and upload video to user's site
+    path('canva/download-upload-video/', download_and_upload_video),
+
+    # 🔥 NEW: Upload video to external platforms
+    path('canva/upload-video-platform/', upload_video_to_platform),
+    path('canva/share-video/', share_video_direct),
+
+    # 🔥 NEW: Download actual video file
+    path('canva/download-actual-video/', download_actual_video_file),
+
+    # 🔥 NEW: Check Canva authentication status
+    path('canva/check-auth/', check_canva_auth),
+
+    # 🔥 NEW: List designs from database
+    path('canva/designs-db/', list_designs_from_db),
+
+    # 🔥 NEW: Get design details from database
+    path('canva/designs-db/<str:design_id>/', get_design_details),
+
+    # 🔥 NEW: Private Design System
+    path('canva/convert-to-private/', convert_to_private_designs),
+    path('canva/export-private/', export_private_design),
+    path('canva/upload-private/', upload_private_design),
+
+    # 🔥 NEW: Social Media OAuth Authentication
+    path('social/auth-status/', social_auth_status),
+    path('social/auth-save/', social_auth_save),
+    path('social/auth-disconnect/', social_auth_disconnect),
+
+    # 🔥 NEW: Unified Posting System
+    path('social/unified-post/', unified_post_content),
+    path('social/posted-content/', list_posted_content),
+    path('social/posted-content/<int:content_id>/', get_posted_content),
 
     # 🔥 NEW: Re-export existing designs
     path('canva/re-export/', re_export_existing_designs),
