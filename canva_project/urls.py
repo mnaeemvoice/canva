@@ -5,10 +5,18 @@ from django.conf import settings
 from django.conf.urls.static import static
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
-    path('', django_home, name='home'),
-    path('api/', include('api.urls')),
-    path('api/browser/', include('api.browser_automation_urls')),
+    path("admin/", admin.site.urls),
+
+    # Send staff users to the Django-native Canva workspace.
+    path("", django_home, name="home"),
+
+    # IMPORTANT: put this before the general /api/ include.
+    # api.urls also defines "browser/", so this order ensures
+    # /api/browser/ resolves to the dashboard instead of the status JSON endpoint.
+    path("api/browser/", include("api.browser_automation_urls")),
+
+    # Existing Canva and social API endpoints.
+    path("api/", include("api.urls")),
 ]
 
 if settings.DEBUG:
