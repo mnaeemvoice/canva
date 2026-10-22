@@ -152,6 +152,19 @@ def remote_canva_input(request):
                 if not (0 <= x <= 1440 and 0 <= y <= 900):
                     return JsonResponse({"success": False, "error": "Click coordinates out of bounds."}, status=400)
                 _page.mouse.click(x, y)
+            elif action == "drag":
+                coords = [float(payload.get(k, -1)) for k in ("x1", "y1", "x2", "y2")]
+                x1, y1, x2, y2 = coords
+                if not all(0 <= v <= limit for v, limit in zip(coords, (1440, 900, 1440, 900))):
+                    return JsonResponse({"success": False, "error": "Drag coordinates out of bounds."}, status=400)
+                _page.mouse.move(x1, y1)
+                _page.mouse.down()
+                _page.mouse.move(x2, y2, steps=12)
+                _page.mouse.up()
+            elif action == "wheel":
+                dx = max(-1000, min(1000, float(payload.get("delta_x", 0))))
+                dy = max(-1000, min(1000, float(payload.get("delta_y", 0))))
+                _page.mouse.wheel(dx, dy)
             elif action == "type":
                 value = str(payload.get("text", ""))[:2000]
                 _page.keyboard.insert_text(value)
