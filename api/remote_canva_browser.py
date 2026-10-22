@@ -21,6 +21,7 @@ _context = None
 _page = None
 _playwright = None
 _last_error = None
+_owner_id = None
 STATE_DIR = Path(os.getenv(
     "CANVA_PLAYWRIGHT_STATE_DIR",
     str(Path(settings.BASE_DIR) / "private" / "browser_states"),
@@ -43,9 +44,11 @@ def _status():
 @require_POST
 def remote_canva_start(request):
     """Start one browser in this Django worker; user completes login manually."""
-    global _browser, _context, _page, _playwright, _last_error
+    global _browser, _context, _page, _playwright, _last_error, _owner_id
     with _lock:
         if _browser and _browser.is_connected() and _page:
+            if _owner_id != request.user.pk:
+                return JsonResponse({"success": False, "error": "Remote browser is owned by another staff user."}, status=409)
             return JsonResponse({"success": True, **_status()})
         try:
             from playwright.sync_api import sync_playwright
@@ -61,6 +64,7 @@ def remote_canva_start(request):
                     accept_downloads=True, viewport={"width": 1440, "height": 900},
                 )
             _page = _context.new_page()
+            _owner_id = request.user.pk
             _page.goto(CANVA_URL, wait_until="domcontentloaded", timeout=60000)
             _last_error = None
             return JsonResponse({"success": True, **_status()})
@@ -75,7 +79,7 @@ def remote_canva_start(request):
 
 
 def _cleanup():
-    global _browser, _context, _page, _playwright
+    global _browser, _context, _page, _playwright, _owner_id
     try:
         if _context:
             _context.close()
@@ -92,12 +96,15 @@ def _cleanup():
     except Exception:
         pass
     _browser = _context = _page = _playwright = None
+    _owner_id = None
 
 
 @staff_member_required
 @require_GET
 def remote_canva_status(request):
     with _lock:
+        if _browser and _owner_id != request.user.pk:
+            return JsonResponse({"success": False, "error": "Remote browser is owned by another staff user."}, status=403)
         return JsonResponse({"success": True, **_status()})
 
 
@@ -106,6 +113,8 @@ def remote_canva_status(request):
 def remote_canva_screenshot(request):
     """Return a screenshot for the staff-only remote workspace."""
     with _lock:
+        if _browser and _owner_id != request.user.pk:
+            return JsonResponse({"success": False, "error": "Remote browser is owned by another staff user."}, status=403)
         if not (_browser and _browser.is_connected() and _page):
             return JsonResponse({"success": False, "error": "Start the Canva browser first."}, status=409)
         try:
@@ -133,6 +142,8 @@ def remote_canva_input(request):
         return JsonResponse({"success": False, "error": "Invalid JSON."}, status=400)
     action = payload.get("action")
     with _lock:
+        if _browser and _owner_id != request.user.pk:
+            return JsonResponse({"success": False, "error": "Remote browser is owned by another staff user."}, status=403)
         if not (_browser and _browser.is_connected() and _page):
             return JsonResponse({"success": False, "error": "Start the Canva browser first."}, status=409)
         try:
