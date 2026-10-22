@@ -8170,132 +8170,130 @@ def get_posted_content(request, content_id):
 # PLATFORM-SPECIFIC POSTING FUNCTIONS
 # ======================
 def post_to_facebook(access_token, content_file, content_file_name, content_type, caption):
-    """Post content to Facebook"""
-    try:
-        import requests
-        import tempfile
-        import os
-        
-        print("📘 Posting to Facebook...")
-        
-        # Facebook Graph API endpoint
-        url = "https://graph.facebook.com/v18.0/me/photos"
-        
-        # Save content to temporary file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{content_file_name.split('.')[-1]}") as tmp_file:
-            tmp_file.write(content_file)
-            tmp_file_path = tmp_file.name
-        
-        try:
-            # Prepare the request
-            files = {
-                'source': open(tmp_file_path, 'rb')
-            }
-            data = {
-                'access_token': access_token,
-                'caption': caption
-            }
-            
-            # Post to Facebook
-            response = requests.post(url, files=files, data=data, timeout=60)
-            
-            if response.ok:
-                result = response.json()
-                post_id = result.get('id')
-                post_url = f"https://www.facebook.com/{post_id}"
-                print(f"✅ Facebook post successful: {post_url}")
-                return post_id, post_url
-            else:
-                print(f"❌ Facebook post failed: {response.status_code}")
-                print(f"❌ Response: {response.text}")
-                raise Exception(f"Facebook API error: {response.text}")
-                
-        finally:
-            # Clean up temporary file
-            if os.path.exists(tmp_file_path):
-                os.unlink(tmp_file_path)
-                
-    except Exception as e:
-        print(f"❌ Facebook posting error: {str(e)}")
-        raise
+    """Publish an image or video to Facebook using Graph API."""
+    import os
+    import tempfile
+    import requests
 
+    is_video = content_type == "video" or content_file_type_is_video(content_file_name)
+    endpoint = "videos" if is_video else "photos"
+    url = f"https://graph.facebook.com/v23.0/me/{endpoint}"
+    suffix = os.path.splitext(content_file_name or "")[1] or (".mp4" if is_video else ".jpg")
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(content_file)
+        temp_path = tmp.name
+    try:
+        with open(temp_path, "rb") as stream:
+            files = {"source": (os.path.basename(content_file_name or ("upload" + suffix)), stream)}
+            data = {"access_token": access_token, "description" if is_video else "caption": caption}
+            response = requests.post(url, files=files, data=data, timeout=180)
+        result = response.json()
+        if not response.ok or not result.get("id"):
+            raise RuntimeError("Facebook Graph API rejected the post: " + str(result)[:600])
+        post_id = result["id"]
+        return post_id, f"https://www.facebook.com/{post_id}"
+    finally:
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+
+
+def content_file_type_is_video(filename):
+    return (filename or "").lower().endswith((".mp4", ".mov", ".m4v", ".webm"))
 
 def post_to_youtube(access_token, content_file, content_file_name, content_type, caption):
-    """Post content to YouTube"""
-    try:
-        print("📺 Posting to YouTube...")
-        
-        # YouTube requires video upload via resumable upload
-        # This is a simplified version - full implementation requires OAuth 2.0 flow
-        
-        # For now, return placeholder
-        post_id = f"youtube_{uuid.uuid4().hex[:8]}"
-        post_url = f"https://www.youtube.com/watch?v={post_id}"
-        print(f"⚠️ YouTube posting not fully implemented (requires OAuth 2.0 flow)")
-        return post_id, post_url
-        
-    except Exception as e:
-        print(f"❌ YouTube posting error: {str(e)}")
-        raise
+    """Upload a video to YouTube using its resumable upload API."""
+    import os
+    import requests
 
+    if content_type != "video" and not content_file_type_is_video(content_file_name):
+        raise RuntimeError("YouTube publishing requires a video file.")
+    filename = os.path.basename(content_file_name or "canva-video.mp4")
+    title = os.path.splitext(filename)[0][:100] or "Canva video"
+    metadata = {
+        "snippet": {"title": title, "description": caption or "", "categoryId": "22"},
+        "status": {"privacyStatus": "private"},
+    }
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json; charset=UTF-8",
+        "X-Upload-Content-Type": "video/mp4",
+        "X-Upload-Content-Length": str(len(content_file)),
+    }
+    init = requests.post(
+        "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status",
+        headers=headers, json=metadata, timeout=60,
+    )
+    if not init.ok or not init.headers.get("Location"):
+        raise RuntimeError("YouTube upload initialization failed: " + init.text[:600])
+    upload = requests.put(
+        init.headers["Location"], data=content_file,
+        headers={"Content-Type": "video/mp4", "Content-Length": str(len(content_file))},
+        timeout=300,
+    )
+    result = upload.json() if upload.content else {}
+    if not upload.ok or not result.get("id"):
+        raise RuntimeError("YouTube video upload failed: " + upload.text[:600])
+    return result["id"], "https://www.youtube.com/watch?v=" + result["id"]
 
 def post_to_instagram(access_token, content_file, content_file_name, content_type, caption):
-    """Post content to Instagram"""
-    try:
-        print("📷 Posting to Instagram...")
-        
-        # Instagram Graph API requires business account
-        # This is a simplified version
-        
-        # For now, return placeholder
-        post_id = f"instagram_{uuid.uuid4().hex[:8]}"
-        post_url = f"https://www.instagram.com/p/{post_id}"
-        print(f"⚠️ Instagram posting not fully implemented (requires business account)")
-        return post_id, post_url
-        
-    except Exception as e:
-        print(f"❌ Instagram posting error: {str(e)}")
-        raise
+    """Publish media using Instagram Graph API and a public HTTPS asset URL."""
+    import requests
+    from .models import CanvaDesign, SocialMediaConnection
 
+    is_video = content_type == "video" or content_file_type_is_video(content_file_name)
+    connection = SocialMediaConnection.objects.filter(platform="instagram", connected=True).first()
+    if not connection or not connection.user_id:
+        raise RuntimeError("Instagram connection needs the Instagram professional-account ID in user_id.")
+    design = CanvaDesign.objects.filter(binary_file_name=content_file_name).order_by("-last_modified").first()
+    media_url = design.asset_url if design else None
+    if not media_url or not media_url.startswith("https://"):
+        raise RuntimeError("Instagram Graph API needs a publicly reachable HTTPS media URL. Deploy the Django media file first.")
+    base = "https://graph.facebook.com/v23.0"
+    payload = {"access_token": access_token, "caption": caption or ""}
+    payload["media_type"] = "REELS" if is_video else "IMAGE"
+    payload["video_url" if is_video else "image_url"] = media_url
+    created = requests.post(f"{base}/{connection.user_id}/media", data=payload, timeout=60)
+    data = created.json()
+    if not created.ok or not data.get("id"):
+        raise RuntimeError("Instagram media container creation failed: " + str(data)[:600])
+    container_id = data["id"]
+    if is_video:
+        import time
+        ready = False
+        for _ in range(30):
+            time.sleep(2)
+            status_res = requests.get(f"{base}/{container_id}", params={
+                "fields": "status_code", "access_token": access_token,
+            }, timeout=30)
+            status_data = status_res.json()
+            if status_data.get("status_code") == "FINISHED":
+                ready = True
+                break
+            if status_data.get("status_code") == "ERROR":
+                raise RuntimeError("Instagram could not process the video: " + str(status_data)[:400])
+        if not ready:
+            raise RuntimeError("Instagram video processing is still pending; retry after the container finishes.")
+    published = requests.post(f"{base}/{connection.user_id}/media_publish", data={
+        "creation_id": container_id, "access_token": access_token,
+    }, timeout=60)
+    result = published.json()
+    if not published.ok or not result.get("id"):
+        raise RuntimeError("Instagram publish failed: " + str(result)[:600])
+    return result["id"], "https://www.instagram.com/"
 
 def post_to_linkedin(access_token, content_file, content_file_name, content_type, caption):
-    """Post content to LinkedIn"""
-    try:
-        import requests
-        import tempfile
-        import os
-        
-        print("💼 Posting to LinkedIn...")
-        
-        # LinkedIn requires multi-step process: register upload -> upload -> create post
-        # This is a simplified version
-        
-        # For now, return placeholder
-        post_id = f"linkedin_{uuid.uuid4().hex[:8]}"
-        post_url = f"https://www.linkedin.com/posts/{post_id}"
-        print(f"⚠️ LinkedIn posting not fully implemented (requires multi-step API)")
-        return post_id, post_url
-        
-    except Exception as e:
-        print(f"❌ LinkedIn posting error: {str(e)}")
-        raise
-
+    """Explicitly fail instead of recording a fabricated LinkedIn post."""
+    raise RuntimeError(
+        "LinkedIn media publishing is not implemented in this branch yet. "
+        "No post was created."
+    )
 
 def post_to_tiktok(access_token, content_file, content_file_name, content_type, caption):
-    """Post content to TikTok"""
-    try:
-        print("🎵 Posting to TikTok...")
-        
-        # TikTok requires specific OAuth flow and video upload
-        # This is a simplified version
-        
-        # For now, return placeholder
-        post_id = f"tiktok_{uuid.uuid4().hex[:8]}"
-        post_url = f"https://www.tiktok.com/@user/video/{post_id}"
-        print(f"⚠️ TikTok posting not fully implemented (requires specific OAuth flow)")
-        return post_id, post_url
-        
-    except Exception as e:
-        print(f"❌ TikTok posting error: {str(e)}")
-        raise
+    """Explicitly fail instead of recording a fabricated TikTok post."""
+    raise RuntimeError(
+        "TikTok Content Posting API upload is not implemented in this branch yet. "
+        "No post was created."
+    )
 
