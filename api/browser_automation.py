@@ -118,7 +118,7 @@ def browser_sync_canva_designs(request):
                             "source": "playwright_browser",
                             "edit_url": item.get("edit_url"),
                             "discovered_at": timezone.now().isoformat(),
-                            "export_note": "Full-fidelity animated export is not attached by metadata sync.",
+                            "export_note": "Metadata sync is complete; use the dashboard MP4 export action to retrieve the full file.",
                         },
                         "last_modified": timezone.now(),
                     },
@@ -136,7 +136,7 @@ def browser_sync_canva_designs(request):
             "created": created,
             "updated": updated,
             "designs": designs[:100],
-            "message": "Design metadata synced. Full animated/video export is not yet implemented in this first automation pass.",
+            "message": "Design metadata synced. Use the dashboard Export MP4 action to retrieve a complete video file where Canva offers MP4 export.",
         })
     except Exception as exc:
         return JsonResponse({
