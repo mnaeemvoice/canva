@@ -5,6 +5,7 @@ Django==6.0.4
 djangorestframework==3.17.1
 idna==3.13
 python-dotenv==1.2.2
+playwright>=1.50,<2
 requests==2.33.1
 sqlparse==0.5.5
 urllib3==2.6.3
