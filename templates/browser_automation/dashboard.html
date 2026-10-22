@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Canva Browser Automation</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui;background:#0b1020;color:#e9eefb}body{margin:0;padding:30px;max-width:1200px;margin-inline:auto}
+.panel{background:#131b30;border:1px solid #263452;border-radius:16px;padding:20px;margin:18px 0}
+.row{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+button{background:#7567f8;color:white;border:0;border-radius:9px;padding:11px 16px;font-weight:700;cursor:pointer}button:disabled{opacity:.5}
+.secondary{background:#273653}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
+.design{background:#10182b;border:1px solid #263452;border-radius:12px;padding:16px;min-width:0}.design h3{overflow-wrap:anywhere}
+.muted{color:#9caac5;font-size:13px}a{color:#bcb5ff}.notice{border-left:3px solid #f3b95e;padding-left:12px}#message{white-space:pre-wrap}
+</style></head>
+<body>
+<h1>Canva Browser Automation</h1>
+<p class="muted">Django dashboard · Playwright · saved browser session · no Canva API token used for this workflow</p>
+<section class="panel">
+<div class="row"><div>Session: <strong>{% if state_saved %}Saved{% else %}Not configured{% endif %}</strong> · Playwright: <strong>{% if playwright_installed %}Installed{% else %}Missing{% endif %}</strong></div><button id="sync">Sync Canva designs</button></div>
+{% if not state_saved %}<p class="notice">Run <code>python manage.py canva_browser_login</code> on a machine with a visible browser. Sign in yourself and complete verification.</p>{% endif %}
+<p class="notice">MP4 export depends on Canva's UI labels and design type. A thumbnail is never treated as a complete animation.</p><p id="message" role="status"></p>
+</section>
+<section class="panel"><div class="row"><h2>Saved designs</h2><span class="muted">Latest 100</span></div>
+<div class="grid">
+{% for design in designs %}<article class="design">
+<h3>{{ design.title|default:design.design_id }}</h3><p class="muted">ID: {{ design.design_id }}</p>
+<p>{{ design.status|default:"saved" }} · {{ design.asset_type|default:"unknown" }}</p>
+{% if design.asset_url %}<p><a href="{{ design.asset_url }}" target="_blank" rel="noopener">Open exported asset</a></p>{% endif %}
+<p><a href="https://www.canva.com/design/{{ design.design_id }}/edit" target="_blank" rel="noopener">Open in Canva</a></p>
+<form method="post" action="/api/browser/canva/export/{{ design.design_id }}/" class="export-form">{% csrf_token %}<button class="secondary" type="submit">Export MP4</button></form>
+</article>{% empty %}<p>No designs synced yet. Set up the session, then sync.</p>{% endfor %}
+</div></section>
+<script>
+const csrf=document.querySelector('input[name="csrfmiddlewaretoken"]')?.value||'';
+const message=document.getElementById('message');
+document.getElementById('sync').addEventListener('click',async function(){
+ const btn=this;btn.disabled=true;message.textContent='Syncing designs from Canva...';
+ try{const r=await fetch('/api/browser/canva/sync/',{method:'POST',headers:{'X-CSRFToken':csrf}});const d=await r.json();
+ message.textContent=d.success?('Found '+d.found+'; created '+d.created+'; updated '+d.updated+'. Reloading...'):((d.error||'Sync failed')+'\n'+(d.next_step||d.detail||''));if(d.success)setTimeout(()=>location.reload(),900);
+ }catch(e){message.textContent='Request failed: '+e;}finally{btn.disabled=false;}
+});
+document.querySelectorAll('.export-form').forEach(form=>form.addEventListener('submit',async function(e){
+ e.preventDefault();const btn=form.querySelector('button');btn.disabled=true;message.textContent='Exporting MP4 through Canva UI...';
+ try{const r=await fetch(form.action,{method:'POST',headers:{'X-CSRFToken':csrf}});const d=await r.json();
+ message.textContent=d.success?('Exported '+d.file+' ('+d.size_bytes+' bytes). Reloading...'):((d.error||'Export failed')+'\n'+(d.detail||''));if(d.success)setTimeout(()=>location.reload(),900);
+ }catch(err){message.textContent='Export request failed: '+err;}finally{btn.disabled=false;}
+}));
+</script></body></html>
