@@ -178,8 +178,9 @@ def _get_worker():
         return _worker
 
 
-def _call(action, request, **payload):
-    result = _get_worker().call(action, request.user.pk, **payload)
+def _call(command, request, **payload):
+    # Keep the worker command separate from payload['action'] used for mouse/keyboard input.
+    result = _get_worker().call(command, request.user.pk, **payload)
     status = result.pop("status", 200)
     return JsonResponse(result, status=status)
 
