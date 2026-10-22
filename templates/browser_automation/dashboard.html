@@ -2,48 +2,47 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Canva Browser Automation</title>
+<title>StudioFlow · Canva Library</title>
 <style>
-:root{color-scheme:dark;font-family:system-ui;background:#0b1020;color:#e9eefb}body{margin:0;padding:30px;max-width:1200px;margin-inline:auto}
-.panel{background:#131b30;border:1px solid #263452;border-radius:16px;padding:20px;margin:18px 0}
-.row{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
-button{background:#7567f8;color:white;border:0;border-radius:9px;padding:11px 16px;font-weight:700;cursor:pointer}button:disabled{opacity:.5}
-.secondary{background:#273653}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
-.design{background:#10182b;border:1px solid #263452;border-radius:12px;padding:16px;min-width:0}.design h3{overflow-wrap:anywhere}
-.muted{color:#9caac5;font-size:13px}a{color:#bcb5ff}.notice{border-left:3px solid #f3b95e;padding-left:12px}#message{white-space:pre-wrap}
+:root{color-scheme:dark;--bg:#080c18;--panel:#11192b;--panel2:#0c1323;--line:#26334d;--text:#edf2ff;--muted:#97a6c3;--accent:#8b7cff;--green:#58d6a3;--amber:#f4bd62;font-family:Inter,ui-sans-serif,system-ui,-apple-system,sans-serif}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 15% 0%,#1c2144 0,transparent 38%),var(--bg);color:var(--text);min-height:100vh}
+.wrap{max-width:1280px;margin:auto;padding:28px 22px 60px}.top{display:flex;justify-content:space-between;align-items:center;gap:18px;flex-wrap:wrap}.brand{display:flex;gap:12px;align-items:center}.logo{width:42px;height:42px;display:grid;place-items:center;background:linear-gradient(135deg,#9a7bff,#5b6cf5);border-radius:14px;font-weight:900;font-size:20px}.eyebrow{font-size:11px;letter-spacing:.16em;color:#a7a0ff;text-transform:uppercase;font-weight:800}.muted{color:var(--muted);font-size:13px}.toplinks{display:flex;gap:12px;align-items:center}a{color:#c6c0ff;text-decoration:none}a:hover{text-decoration:underline}
+h1{font-size:clamp(28px,4vw,42px);letter-spacing:-.04em;margin:30px 0 8px}h2{font-size:18px;margin:0}h3{font-size:16px;line-height:1.4;overflow-wrap:anywhere}.sub{color:var(--muted);max-width:750px;line-height:1.6}.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:25px 0}.stat,.panel{background:linear-gradient(145deg,rgba(19,28,49,.96),rgba(12,19,34,.98));border:1px solid var(--line);border-radius:18px}.stat{padding:18px}.stat strong{font-size:25px;display:block;margin-top:8px}.panel{padding:22px;margin:18px 0}.panelhead{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}.pill{display:inline-flex;align-items:center;gap:7px;padding:6px 10px;border:1px solid var(--line);border-radius:999px;font-size:12px;color:var(--muted)}.dot{width:7px;height:7px;border-radius:50%;background:var(--amber)}.dot.ok{background:var(--green)}
+button,.button{border:0;border-radius:10px;background:var(--accent);color:white;padding:11px 15px;font-weight:750;cursor:pointer;display:inline-flex;justify-content:center;align-items:center;gap:8px;font-size:13px}button:disabled{opacity:.55;cursor:wait}.secondary{background:#253451;color:#edf2ff}.outline{background:transparent;border:1px solid #394766;color:#d5dafa}.danger{background:#4a2434}.notice{padding:12px 14px;border-radius:10px;background:#302716;border:1px solid #59482b;color:#ffdda0;font-size:13px;line-height:1.55}.success{background:#102b27;border-color:#225447;color:#b6ffe5}.error{background:#351d2b;border-color:#68364d;color:#ffc3d2}#message{white-space:pre-wrap;margin-top:12px;font-size:13px;line-height:1.6}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}.design{background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:17px;min-width:0;display:flex;flex-direction:column;gap:8px}.design h3{margin:4px 0}.design p{margin:0}.design .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:auto;padding-top:12px}.tiny{font-size:11px;color:var(--muted);overflow-wrap:anywhere}.tag{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#c2baff;background:#27234b;padding:5px 8px;border-radius:7px;width:max-content}.empty{padding:24px;text-align:center;color:var(--muted);border:1px dashed #394766;border-radius:12px}
+.formgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.field{display:flex;flex-direction:column;gap:7px}.field label{font-size:12px;color:#bdc8de;font-weight:700}input,select,textarea{width:100%;border:1px solid #34425e;background:#090f1d;color:var(--text);padding:11px 12px;border-radius:9px;font:inherit;font-size:13px}textarea{min-height:84px;resize:vertical}.platforms{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:10px}.platform{border:1px solid var(--line);background:var(--panel2);padding:13px;border-radius:12px}.platform strong{display:block;margin-bottom:5px}.history{display:grid;gap:9px}.historyrow{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;border:1px solid var(--line);border-radius:10px;padding:12px;font-size:13px}.foot{color:#72809b;font-size:12px;margin-top:26px}
+@media(max-width:650px){.wrap{padding:18px 12px 40px}.stats{grid-template-columns:1fr}.formgrid{grid-template-columns:1fr}.panel{padding:16px}}
 </style></head>
-<body>
-<h1>Canva Browser Automation</h1>
-<p class="muted">Django dashboard · Playwright · saved browser session · no Canva API token used for this workflow</p>
-<section class="panel">
-<form id="csrf-form" hidden>{% csrf_token %}</form>
-<div class="row"><div>Session: <strong>{% if state_saved %}Saved{% else %}Not configured{% endif %}</strong> · Playwright: <strong>{% if playwright_installed %}Installed{% else %}Missing{% endif %}</strong></div><button id="sync">Sync Canva designs</button></div>
-{% if not state_saved %}<p class="notice">Run <code>python manage.py canva_browser_login</code> on a machine with a visible browser. Sign in yourself and complete verification.</p>{% endif %}
-<p class="notice">MP4 export depends on Canva's UI labels and design type. A thumbnail is never treated as a complete animation.</p><p id="message" role="status"></p>
+<body><main class="wrap">
+<header class="top"><div class="brand"><div class="logo">S</div><div><div class="eyebrow">StudioFlow / Django</div><div style="font-weight:800">Canva design workspace</div></div></div><div class="toplinks"><span class="pill"><span class="dot {% if state_saved %}ok{% endif %}"></span>Canva session {% if state_saved %}saved{% else %}not set up{% endif %}</span><a href="/admin/">Django Admin ↗</a><a href="/api/browser/status/">Status JSON ↗</a></div></header>
+<h1>Your designs, in one workspace.</h1><p class="sub">A Django-native interface for discovering your Canva designs, exporting full MP4 files, and preparing content for social publishing. No Canva API is used for the browser-sync/export workflow.</p>
+<div class="stats"><div class="stat"><span class="muted">Saved designs</span><strong>{{ designs|length }}</strong><span class="muted">Latest 100 in database</span></div><div class="stat"><span class="muted">Browser automation</span><strong>{% if playwright_installed %}Ready{% else %}Setup needed{% endif %}</strong><span class="muted">Playwright + Chromium</span></div><div class="stat"><span class="muted">Connected platforms</span><strong>{{ connections|length }} / 5</strong><span class="muted">Stored social account tokens</span></div></div>
+
+<section class="panel"><div class="panelhead"><div><h2>Canva browser connection</h2><p class="muted">Sign in yourself once; session state stays on your server.</p></div><div class="pill"><span class="dot {% if state_saved %}ok{% endif %}"></span>{% if state_saved %}Session file found{% else %}Login required{% endif %}</div></div>
+{% if not state_saved %}<div class="notice">Run <code>python manage.py canva_browser_login</code> in a terminal on the machine that can open a visible browser. Complete Canva login/verification yourself. Never commit or share the saved session file.</div>{% endif %}
+<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px"><button id="sync">↻ Sync my Canva designs</button><a class="button secondary" href="https://www.canva.com/your-designs" target="_blank" rel="noopener">Open Canva designs ↗</a></div><p id="message" role="status"></p>
 </section>
-<section class="panel"><div class="row"><h2>Saved designs</h2><span class="muted">Latest 100</span></div>
-<div class="grid">
-{% for design in designs %}<article class="design">
-<h3>{{ design.title|default:design.design_id }}</h3><p class="muted">ID: {{ design.design_id }}</p>
-<p>{{ design.status|default:"saved" }} · {{ design.asset_type|default:"unknown" }}</p>
-{% if design.asset_url %}<p><a href="{{ design.asset_url }}" target="_blank" rel="noopener">Open exported asset</a></p>{% endif %}
-<p><a href="https://www.canva.com/design/{{ design.design_id }}/edit" target="_blank" rel="noopener">Open in Canva</a></p>
-<form method="post" action="/api/browser/canva/export/{{ design.design_id }}/" class="export-form">{% csrf_token %}<button class="secondary" type="submit">Export MP4</button></form>
-</article>{% empty %}<p>No designs synced yet. Set up the session, then sync.</p>{% endfor %}
-</div></section>
+
+<section class="panel"><div class="panelhead"><div><h2>Design library</h2><p class="muted">Export a real MP4 from the Canva editor. Thumbnails are never treated as completed animations.</p></div><span class="pill">{{ designs|length }} listed</span></div>
+<div class="grid">{% for design in designs %}<article class="design"><span class="tag">{{ design.category|default:"Canva design" }}</span><h3>{{ design.title|default:design.design_id }}</h3><p class="tiny">ID: {{ design.design_id }}</p><p class="muted">{{ design.status|default:"saved" }} · {{ design.asset_type|default:"unknown" }}</p>
+{% if design.asset_url %}<p><a href="{{ design.asset_url }}" target="_blank" rel="noopener">▶ Open exported file</a></p>{% endif %}
+<div class="actions"><a class="button outline" href="https://www.canva.com/design/{{ design.design_id }}/edit" target="_blank" rel="noopener">Edit in Canva ↗</a><form method="post" action="/api/browser/canva/export/{{ design.design_id }}/" class="export-form">{% csrf_token %}<button class="secondary" type="submit">{% if design.status == "browser_exported" %}Export MP4 again{% else %}Export MP4{% endif %}</button></form></div>
+{% if design.status == "browser_exported" %}<span class="pill"><span class="dot ok"></span>MP4 saved · ready to prepare</span>{% endif %}
+</article>{% empty %}<div class="empty" style="grid-column:1/-1">No designs yet. Save your Canva session, then click “Sync my Canva designs”.</div>{% endfor %}</div></section>
+
+<section class="panel"><div class="panelhead"><div><h2>Social accounts</h2><p class="muted">Save an access token obtained through the platform's official authorization flow.</p></div></div>
+<div class="notice">Platform authorization and media publishing rules vary. Do not paste passwords here. Use an access token with the minimum required permissions; some accounts need business/page permissions or app review. Tokens are sensitive credentials.</div>
+<div class="platforms" style="margin-top:14px">{% for platform,label in platform_options %}<div class="platform"><strong>{{ label }}</strong><div class="muted">{% if platform in connections %}<span style="color:var(--green)">● Connected</span>{% if connections.platform.username %} · {{ connections.platform.username }}{% endif %}{% else %}Not connected{% endif %}</div></div>{% endfor %}</div>
+<form id="connect-form" style="margin-top:18px"><div class="formgrid"><div class="field"><label for="platform">Platform</label><select id="platform" required>{% for platform,label in platform_options %}<option value="{{ platform }}">{{ label }}</option>{% endfor %}</select></div><div class="field"><label for="username">Account/page name (optional)</label><input id="username" autocomplete="off" placeholder="Page or channel name"></div><div class="field" style="grid-column:1/-1"><label for="token">Access token</label><input id="token" type="password" autocomplete="new-password" required placeholder="Paste platform access token"></div></div><p style="margin-top:12px"><button type="submit" class="secondary">Save connection</button></p><p class="muted" id="connect-message" role="status"></p></form>
+</section>
+
+<section class="panel"><div class="panelhead"><div><h2>Publishing history</h2><p class="muted">Recent records saved in Django.</p></div></div><div class="history">{% for item in posted_content %}<div class="historyrow"><div><strong>{{ item.get_platform_display }}</strong> · {{ item.content_type }}<div class="tiny">{{ item.content_file_name|default:"No file name" }} · {{ item.created_at|date:"Y-m-d H:i" }}</div></div><div><span class="pill">{{ item.status }}</span>{% if item.post_url %} <a href="{{ item.post_url }}" target="_blank" rel="noopener">Open post ↗</a>{% endif %}</div></div>{% empty %}<div class="empty">No publishing history yet.</div>{% endfor %}</div></section>
+<p class="foot">Django templates · Playwright · Session data stays local · Always verify a post on the destination platform.</p>
+</main>
 <script>
 const csrf=document.querySelector('input[name="csrfmiddlewaretoken"]')?.value||'';
 const message=document.getElementById('message');
-document.getElementById('sync').addEventListener('click',async function(){
- const btn=this;btn.disabled=true;message.textContent='Syncing designs from Canva...';
- try{const r=await fetch('/api/browser/canva/sync/',{method:'POST',headers:{'X-CSRFToken':csrf}});const d=await r.json();
- message.textContent=d.success?('Found '+d.found+'; created '+d.created+'; updated '+d.updated+'. Reloading...'):((d.error||'Sync failed')+'\n'+(d.next_step||d.detail||''));if(d.success)setTimeout(()=>location.reload(),900);
- }catch(e){message.textContent='Request failed: '+e;}finally{btn.disabled=false;}
-});
-document.querySelectorAll('.export-form').forEach(form=>form.addEventListener('submit',async function(e){
- e.preventDefault();const btn=form.querySelector('button');btn.disabled=true;message.textContent='Exporting MP4 through Canva UI...';
- try{const r=await fetch(form.action,{method:'POST',headers:{'X-CSRFToken':csrf}});const d=await r.json();
- message.textContent=d.success?('Exported '+d.file+' ('+d.size_bytes+' bytes). Reloading...'):((d.error||'Export failed')+'\n'+(d.detail||''));if(d.success)setTimeout(()=>location.reload(),900);
- }catch(err){message.textContent='Export request failed: '+err;}finally{btn.disabled=false;}
-}));
+document.getElementById('sync').addEventListener('click',async function(){const btn=this;btn.disabled=true;message.textContent='Opening Canva and scanning your designs…';try{const r=await fetch('/api/browser/canva/sync/',{method:'POST',headers:{'X-CSRFToken':csrf}});const d=await r.json();message.textContent=d.success?('Found '+d.found+' designs · '+d.created+' new · '+d.updated+' updated. Reloading…'):((d.error||'Sync failed')+'\n'+(d.next_step||d.detail||''));if(d.success)setTimeout(()=>location.reload(),900)}catch(e){message.textContent='Sync request failed: '+e}finally{btn.disabled=false}});
+document.querySelectorAll('.export-form').forEach(form=>form.addEventListener('submit',async function(e){e.preventDefault();const btn=form.querySelector('button');btn.disabled=true;message.textContent='Exporting MP4 from Canva. Animated designs can take a few minutes…';try{const r=await fetch(form.action,{method:'POST',headers:{'X-CSRFToken':csrf}});const d=await r.json();message.textContent=d.success?('MP4 exported and stored ('+Math.round(d.size_bytes/1024/1024*100)/100+' MB). Reloading…'):((d.error||'Export failed')+'\n'+(d.detail||''));if(d.success)setTimeout(()=>location.reload(),1200)}catch(e){message.textContent='Export request failed: '+e}finally{btn.disabled=false}}));
+document.getElementById('connect-form').addEventListener('submit',async function(e){e.preventDefault();const out=document.getElementById('connect-message');out.textContent='Saving token…';try{const r=await fetch('/api/social/auth-save/',{method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':csrf},body:JSON.stringify({platform:document.getElementById('platform').value,access_token:document.getElementById('token').value,username:document.getElementById('username').value})});const d=await r.json();out.textContent=r.ok?(d.message||'Saved. Reloading…'):(d.error||d.message||'Unable to save connection');if(r.ok)setTimeout(()=>location.reload(),900)}catch(e){out.textContent='Connection save failed: '+e}});
 </script></body></html>
