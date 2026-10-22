@@ -9,7 +9,7 @@ the application does not impersonate Canva or bypass its security controls.
 
 ## What this is / is not
 
-- It is a remote-browser workspace rendered as screenshots with input relay.
+- It is a remote-browser workspace rendered as screenshots with click, drag, scroll and keyboard/text input relay. Playwright objects run on a dedicated worker thread so Django requests do not use the synchronous Playwright objects across request threads.
 - It is not a Canva iframe, and it does not make Canva's editor DOM part of the
   Django page.
 - The existing design-sync/export endpoints remain separate workflows.
