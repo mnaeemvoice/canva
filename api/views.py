@@ -8281,7 +8281,11 @@ def post_to_instagram(access_token, content_file, content_file_name, content_typ
     result = published.json()
     if not published.ok or not result.get("id"):
         raise RuntimeError("Instagram publish failed: " + str(result)[:600])
-    return result["id"], "https://www.instagram.com/"
+    permalink_response = requests.get(f"{base}/{result['id']}", params={
+        "fields": "permalink", "access_token": access_token,
+    }, timeout=30)
+    permalink_data = permalink_response.json() if permalink_response.ok else {}
+    return result["id"], permalink_data.get("permalink", "https://www.instagram.com/")
 
 def post_to_linkedin(access_token, content_file, content_file_name, content_type, caption):
     """Explicitly fail instead of recording a fabricated LinkedIn post."""
