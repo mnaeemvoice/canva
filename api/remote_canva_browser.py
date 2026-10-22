@@ -126,6 +126,8 @@ class CanvaBrowserWorker:
                         "image": "data:image/png;base64," + base64.b64encode(image).decode("ascii"),
                         "url": driver.current_url,
                         "title": driver.title,
+                        "playwright_attached": pw_page is not None,
+                        "playwright_error": playwright_error,
                     }
                 elif command == "input":
                     self._check_owner(driver, owner_id, caller_id)
