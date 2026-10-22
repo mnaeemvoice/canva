@@ -19,7 +19,7 @@ button,.button{border:0;border-radius:10px;background:var(--accent);color:white;
 <div class="stats"><div class="stat"><span class="muted">Saved designs</span><strong>{{ designs|length }}</strong><span class="muted">Latest 100 in database</span></div><div class="stat"><span class="muted">Browser automation</span><strong>{% if playwright_installed %}Ready{% else %}Setup needed{% endif %}</strong><span class="muted">Selenium + Chrome</span></div><div class="stat"><span class="muted">Connected platforms</span><strong>{{ connections|length }} / 5</strong><span class="muted">Stored social account tokens</span></div></div>
 
 <section class="panel"><div class="panelhead"><div><h2>Canva browser connection</h2><p class="muted">Sign in yourself once; Selenium keeps the session in a private Chrome profile.</p></div><div class="pill"><span class="dot {% if state_saved %}ok{% endif %}"></span>{% if state_saved %}Chrome profile is persistent{% else %}Login required{% endif %}</div></div>
-{% if not state_saved %}<div class="notice">The Selenium worker uses a persistent Chrome profile in private/browser_states/chrome-profile. Start the browser below and sign in manually. Complete Canva login/verification yourself. Never commit or share the saved session file.</div>{% endif %}
+{% if not state_saved %}<div class="notice">The Selenium worker uses a persistent Chrome profile in private/browser_states/chrome-profile. Start the browser below and sign in manually. Complete Canva login/verification yourself. Never commit or share the saved Chrome profile.</div>{% endif %}
 <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px"><button id="sync">↻ Sync my Canva designs</button><a class="button secondary" href="https://www.canva.com/your-designs" target="_blank" rel="noopener">Open Canva designs ↗</a></div><p id="message" role="status"></p>
 </section>
 
@@ -52,7 +52,7 @@ button,.button{border:0;border-radius:10px;background:var(--accent);color:white;
 </section>
 
 <section class="panel"><div class="panelhead"><div><h2>Publishing history</h2><p class="muted">Recent records saved in Django.</p></div></div><div class="history">{% for item in posted_content %}<div class="historyrow"><div><strong>{{ item.get_platform_display }}</strong> · {{ item.content_type }}<div class="tiny">{{ item.content_file_name|default:"No file name" }} · {{ item.created_at|date:"Y-m-d H:i" }}</div></div><div><span class="pill">{{ item.status }}</span>{% if item.post_url %} <a href="{{ item.post_url }}" target="_blank" rel="noopener">Open post ↗</a>{% endif %}</div></div>{% empty %}<div class="empty">No publishing history yet.</div>{% endfor %}</div></section>
-<p class="foot">Django templates · Playwright · Session data stays local · Always verify a post on the destination platform.</p>
+<p class="foot">Django templates · Selenium · Session data stays in a private Chrome profile · Always verify a post on the destination platform.</p>
 </main>
 <script>
 const csrf=document.querySelector('#csrf-form input[name="csrfmiddlewaretoken"]')?.value||document.querySelector('input[name="csrfmiddlewaretoken"]')?.value||'';
