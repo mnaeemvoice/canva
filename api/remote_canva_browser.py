@@ -7,6 +7,7 @@ import base64
 import json
 import os
 import queue
+import shutil
 import threading
 from concurrent.futures import Future
 from pathlib import Path
@@ -73,6 +74,34 @@ class CanvaBrowserWorker:
                         except OSError:
                             pass
                         options = Options()
+                        # Selenium Manager does not always discover Chromium/Chrome on
+                        # Linux installations that use non-standard package paths.
+                        # Prefer an explicit env override, otherwise detect common binaries.
+                        configured_binary = os.getenv("CHROME_BINARY", "").strip()
+                        candidates = [
+                            configured_binary,
+                            shutil.which("google-chrome"),
+                            shutil.which("google-chrome-stable"),
+                            shutil.which("chrome"),
+                            shutil.which("chromium"),
+                            shutil.which("chromium-browser"),
+                            "/usr/bin/google-chrome",
+                            "/usr/bin/google-chrome-stable",
+                            "/usr/bin/chromium",
+                            "/usr/bin/chromium-browser",
+                            "/snap/bin/chromium",
+                            "/opt/google/chrome/chrome",
+                        ]
+                        chrome_binary = next(
+                            (candidate for candidate in candidates if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK)),
+                            None,
+                        )
+                        if not chrome_binary:
+                            raise RuntimeError(
+                                "Chrome/Chromium binary was not found. Install Google Chrome or Chromium, "
+                                "or set CHROME_BINARY to its executable path (for example /usr/bin/chromium)."
+                            )
+                        options.binary_location = chrome_binary
                         options.add_argument(f"--user-data-dir={PROFILE_DIR.resolve()}")
                         options.add_argument(f"--window-size={VIEWPORT['width']},{VIEWPORT['height']}")
                         options.add_argument("--disable-notifications")
