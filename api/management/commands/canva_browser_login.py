@@ -44,7 +44,7 @@ class Command(BaseCommand):
             page.goto("https://www.canva.com/login", wait_until="domcontentloaded")
             self.stdout.write("After signing in, open Your designs. Return here and press Enter.")
             input()
-            if "canva.com" not in page.url:
+            if "canva.com" not in page.url or "/login" in page.url.lower() or "/signup" in page.url.lower():
                 browser.close()
                 raise CommandError("Canva login was not detected.")
             context.storage_state(path=str(state_file))
