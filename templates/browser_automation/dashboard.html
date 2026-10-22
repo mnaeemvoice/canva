@@ -28,7 +28,7 @@ button,.button{border:0;border-radius:10px;background:var(--accent);color:white;
 <div class="notice">Click <strong>Login with Canva</strong>, then sign in inside the workspace below. Complete any verification yourself. When logged in, click <strong>Save Canva session</strong> so design sync/export can reuse the session. The browser is currently owned by this Django worker.</div>
 <div class="remote-toolbar"><button id="remote-start">Login with Canva</button><button id="remote-save" class="secondary" disabled>Save Canva session</button><button id="remote-refresh" class="outline" disabled>Refresh screen</button><button id="remote-stop" class="danger" disabled>Stop browser</button></div>
 <img id="remote-screen" class="remote-screen" alt="Remote Canva browser screen will appear here" hidden>
-<div class="remote-toolbar"><input id="remote-text" placeholder="Type text into the Canva browser" style="flex:1;min-width:200px"><button id="remote-type" class="secondary" disabled>Type text</button><select id="remote-key" style="width:auto" disabled><option>Enter</option><option>Tab</option><option>Escape</option><option>Backspace</option><option>Delete</option><option>ArrowUp</option><option>ArrowDown</option><option>ArrowLeft</option><option>ArrowRight</option><option>Space</option></select><button id="remote-send-key" class="secondary" disabled>Send key</button></div>
+<div class="remote-toolbar"><input id="remote-text" placeholder="Type text into the Canva browser" style="flex:1;min-width:200px"><button id="remote-type" class="secondary" disabled>Type text</button><button id="remote-scroll-up" class="outline" disabled>↑ Scroll</button><button id="remote-scroll-down" class="outline" disabled>↓ Scroll</button><select id="remote-key" style="width:auto" disabled><option>Enter</option><option>Tab</option><option>Escape</option><option>Backspace</option><option>Delete</option><option>ArrowUp</option><option>ArrowDown</option><option>ArrowLeft</option><option>ArrowRight</option><option>Space</option></select><button id="remote-send-key" class="secondary" disabled>Send key</button></div>
 <p id="remote-message" class="remote-status" role="status">Start the remote browser to begin.</p>
 </section>
 
@@ -62,7 +62,7 @@ const message=document.getElementById('message');
 const remoteImg=document.getElementById('remote-screen');
 const remoteMsg=document.getElementById('remote-message');
 const remoteState=document.getElementById('remote-state');
-const remoteControls=['remote-save','remote-refresh','remote-stop','remote-type','remote-key','remote-send-key'];
+const remoteControls=['remote-save','remote-refresh','remote-stop','remote-type','remote-key','remote-send-key','remote-scroll-up','remote-scroll-down'];
 let remoteTimer=null, remoteBusy=false;
 async function remotePost(action, extra={}) {
   const r=await fetch('/api/browser/remote/input/',{method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':csrf},body:JSON.stringify({action,...extra})});
@@ -92,7 +92,21 @@ document.getElementById('remote-save').addEventListener('click',async()=>{try{aw
 document.getElementById('remote-stop').addEventListener('click',async()=>{try{await remotePost('stop');if(remoteTimer)clearInterval(remoteTimer);remoteTimer=null;remoteImg.hidden=true;remoteState.textContent='Browser stopped';remoteControls.forEach(id=>document.getElementById(id).disabled=true);document.getElementById('remote-start').disabled=false;remoteMsg.textContent='Remote browser stopped.';}catch(e){remoteMsg.textContent=e.message;}});
 document.getElementById('remote-type').addEventListener('click',async()=>{try{await remotePost('type',{text:document.getElementById('remote-text').value});remoteMsg.textContent='Text sent to Canva browser.';await remoteRefresh();}catch(e){remoteMsg.textContent=e.message;}});
 document.getElementById('remote-send-key').addEventListener('click',async()=>{try{await remotePost('key',{key:document.getElementById('remote-key').value});await remoteRefresh();}catch(e){remoteMsg.textContent=e.message;}});
-remoteImg.addEventListener('click',async e=>{const r=remoteImg.getBoundingClientRect();const x=(e.clientX-r.left)/r.width*1440;const y=(e.clientY-r.top)/r.height*900;try{await remotePost('click',{x,y});setTimeout(remoteRefresh,250);}catch(err){remoteMsg.textContent=err.message;}});
+document.getElementById('remote-scroll-up').addEventListener('click',async()=>{try{await remotePost('wheel',{delta_y:-600});setTimeout(remoteRefresh,200);}catch(e){remoteMsg.textContent=e.message;}});
+document.getElementById('remote-scroll-down').addEventListener('click',async()=>{try{await remotePost('wheel',{delta_y:600});setTimeout(remoteRefresh,200);}catch(e){remoteMsg.textContent=e.message;}});
+function remotePoint(e){const r=remoteImg.getBoundingClientRect();return {x:Math.max(0,Math.min(1440,(e.clientX-r.left)/r.width*1440)),y:Math.max(0,Math.min(900,(e.clientY-r.top)/r.height*900))};}
+let remotePointerStart=null;
+remoteImg.addEventListener('pointerdown',e=>{if(remoteImg.hidden)return;remotePointerStart=remotePoint(e);remoteImg.setPointerCapture(e.pointerId);});
+remoteImg.addEventListener('pointerup',async e=>{
+  if(!remotePointerStart)return;
+  const start=remotePointerStart,end=remotePoint(e);remotePointerStart=null;
+  try {
+    if(Math.hypot(end.x-start.x,end.y-start.y)>8) await remotePost('drag',{x1:start.x,y1:start.y,x2:end.x,y2:end.y});
+    else await remotePost('click',{x:end.x,y:end.y});
+    setTimeout(remoteRefresh,300);
+  } catch(err){remoteMsg.textContent=err.message;}
+});
+remoteImg.addEventListener('wheel',async e=>{e.preventDefault();try{await remotePost('wheel',{delta_x:e.deltaX,delta_y:e.deltaY});setTimeout(remoteRefresh,200);}catch(err){remoteMsg.textContent=err.message;}},{passive:false});
 
 document.getElementById('sync').addEventListener('click',async function(){const btn=this;btn.disabled=true;message.textContent='Opening Canva and scanning your designs…';try{const r=await fetch('/api/browser/canva/sync/',{method:'POST',headers:{'X-CSRFToken':csrf}});const d=await r.json();message.textContent=d.success?('Found '+d.found+' designs · '+d.created+' new · '+d.updated+' updated. Reloading…'):((d.error||'Sync failed')+'\n'+(d.next_step||d.detail||''));if(d.success)setTimeout(()=>location.reload(),900)}catch(e){message.textContent='Sync request failed: '+e}finally{btn.disabled=false}});
 document.querySelectorAll('.export-form').forEach(form=>form.addEventListener('submit',async function(e){e.preventDefault();const btn=form.querySelector('button');btn.disabled=true;message.textContent='Exporting MP4 from Canva. Animated designs can take a few minutes…';try{const r=await fetch(form.action,{method:'POST',headers:{'X-CSRFToken':csrf}});const d=await r.json();message.textContent=d.success?('MP4 exported and stored ('+Math.round(d.size_bytes/1024/1024*100)/100+' MB). Reloading…'):((d.error||'Export failed')+'\n'+(d.detail||''));if(d.success)setTimeout(()=>location.reload(),1200)}catch(e){message.textContent='Export request failed: '+e}finally{btn.disabled=false}}));
