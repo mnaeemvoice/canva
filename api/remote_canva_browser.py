@@ -23,6 +23,7 @@ STATE_DIR = Path(os.getenv(
     str(Path(settings.BASE_DIR) / "private" / "browser_states"),
 ))
 PROFILE_DIR = Path(os.getenv("CANVA_SELENIUM_PROFILE_DIR", str(STATE_DIR / "chrome-profile")))
+PLAYWRIGHT_STATE_FILE = STATE_DIR / "canva-storage-state.json"
 CANVA_URL = "https://www.canva.com/"
 VIEWPORT = {"width": 1440, "height": 900}
 ALLOWED_KEYS = {
@@ -48,6 +49,11 @@ class CanvaBrowserWorker:
 
     def _run(self):
         driver = None
+        playwright = None
+        pw_browser = None
+        pw_context = None
+        pw_page = None
+        playwright_error = ""
         owner_id = None
         last_error = ""
         while True:
@@ -79,12 +85,39 @@ class CanvaBrowserWorker:
                         driver.set_window_size(VIEWPORT["width"], VIEWPORT["height"])
                         owner_id = caller_id
                         driver.get(CANVA_URL)
+                        # Attach Playwright to the SAME Chrome started by Selenium.
+                        # Selenium remains the visible/manual control layer; Playwright
+                        # supplies DOM-aware inspection and storage-state persistence.
+                        try:
+                            from playwright.sync_api import sync_playwright
+                            playwright = sync_playwright().start()
+                            debugger_address = driver.capabilities.get("goog:chromeOptions", {}).get("debuggerAddress")
+                            if not debugger_address:
+                                raise RuntimeError("ChromeDriver did not expose a CDP debugger address.")
+                            pw_browser = playwright.chromium.connect_over_cdp("http://" + debugger_address)
+                            pw_context = pw_browser.contexts[0] if pw_browser.contexts else None
+                            pw_page = pw_context.pages[0] if pw_context and pw_context.pages else None
+                            if pw_page is None:
+                                raise RuntimeError("Playwright attached, but no Canva tab was found.")
+                            playwright_error = ""
+                        except Exception as exc:
+                            playwright_error = f"{type(exc).__name__}: {exc}"[:300]
+                            if playwright:
+                                try:
+                                    playwright.stop()
+                                except Exception:
+                                    pass
+                            playwright = pw_browser = pw_context = pw_page = None
                     last_error = ""
                     result = self._status(driver, last_error)
+                    result["playwright_attached"] = pw_page is not None
+                    result["playwright_error"] = playwright_error
                 elif command == "status":
                     if driver and owner_id != caller_id:
                         raise PermissionError("Remote browser is owned by another staff user.")
                     result = self._status(driver, last_error)
+                    result["playwright_attached"] = pw_page is not None
+                    result["playwright_error"] = playwright_error
                 elif command == "screenshot":
                     self._check_owner(driver, owner_id, caller_id)
                     image = driver.get_screenshot_as_png()
@@ -128,9 +161,31 @@ class CanvaBrowserWorker:
                             raise ValueError("Only https://www.canva.com pages are allowed.")
                         driver.get(parsed.geturl())
                     elif kind == "save_session":
-                        # Chrome's persistent user-data directory retains the signed-in session.
-                        result = {"success": True, "session_saved": True}
+                        # Keep Chrome's profile and export Playwright state for other workflows.
+                        session_saved = False
+                        if pw_context is not None:
+                            STATE_DIR.mkdir(parents=True, exist_ok=True)
+                            pw_context.storage_state(path=str(PLAYWRIGHT_STATE_FILE))
+                            try:
+                                os.chmod(STATE_DIR, 0o700)
+                                os.chmod(PLAYWRIGHT_STATE_FILE, 0o600)
+                            except OSError:
+                                pass
+                            session_saved = True
+                        result = {
+                            "success": True,
+                            "session_saved": True,
+                            "playwright_state_saved": session_saved,
+                            "playwright_attached": pw_page is not None,
+                            "playwright_error": playwright_error,
+                        }
                     elif kind == "stop":
+                        if playwright:
+                            try:
+                                playwright.stop()
+                            except Exception:
+                                pass
+                        playwright = pw_browser = pw_context = pw_page = None
                         driver.quit()
                         driver = None
                         owner_id = None
@@ -140,6 +195,8 @@ class CanvaBrowserWorker:
                     last_error = ""
                     if kind not in {"stop", "save_session"}:
                         result = self._status(driver, last_error)
+                        result["playwright_attached"] = pw_page is not None
+                        result["playwright_error"] = playwright_error
                     elif kind == "save_session":
                         result.update(self._status(driver, last_error))
                 else:
