@@ -21,7 +21,7 @@ STATE_FILE = Path(os.getenv(
 @csrf_protect
 @require_POST
 def browser_export_design_mp4(request, design_id):
-    """Attempt a true MP4 download from Canva's editor; never substitute a thumbnail."""
+    """Export a real MP4 via Canva's UI; never substitute a thumbnail."""
     if not re.fullmatch(r"[A-Za-z0-9_-]{3,255}", design_id or ""):
         return JsonResponse({"success": False, "error": "Invalid design ID."}, status=400)
     if not STATE_FILE.is_file():
@@ -46,7 +46,8 @@ def browser_export_design_mp4(request, design_id):
             page.goto("https://www.canva.com/design/" + design_id + "/edit",
                       wait_until="domcontentloaded", timeout=60000)
             page.wait_for_timeout(3000)
-            if "login" in page.url.lower():
+            if "login" in page.url.lower() or "signup" in page.url.lower():
+                context.close()
                 browser.close()
                 return JsonResponse({"success": False, "error": "Session expired; sign in again."}, status=409)
 
@@ -68,21 +69,23 @@ def browser_export_design_mp4(request, design_id):
         design.asset_type = "video"
         design.category = "animation"
         design.status = "browser_exported"
+        design.binary_file = target.read_bytes()
         design.binary_file_name = target.name
         design.binary_file_type = "video/mp4"
         design.binary_file_size = target.stat().st_size
         design.last_modified = timezone.now()
         design.save(update_fields=[
-            "asset_url", "asset_type", "category", "status", "binary_file_name",
-            "binary_file_type", "binary_file_size", "last_modified",
+            "asset_url", "asset_type", "category", "status", "binary_file",
+            "binary_file_name", "binary_file_type", "binary_file_size", "last_modified",
         ])
         return JsonResponse({
             "success": True, "design_id": design_id, "file": target.name,
             "size_bytes": target.stat().st_size, "asset_url": design.asset_url,
+            "publish_ready": True,
         })
     except Exception as exc:
         return JsonResponse({
             "success": False,
-            "error": "Canva MP4 export failed. The editor UI may have changed or this design may not support video export.",
+            "error": "Canva MP4 export failed. Canva's UI labels may have changed or this design may not support MP4 export.",
             "detail": str(exc)[:500],
         }, status=502)
