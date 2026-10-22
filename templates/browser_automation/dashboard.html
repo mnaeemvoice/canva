@@ -16,6 +16,7 @@ button{background:#7567f8;color:white;border:0;border-radius:9px;padding:11px 16
 <h1>Canva Browser Automation</h1>
 <p class="muted">Django dashboard · Playwright · saved browser session · no Canva API token used for this workflow</p>
 <section class="panel">
+<form id="csrf-form" hidden>{% csrf_token %}</form>
 <div class="row"><div>Session: <strong>{% if state_saved %}Saved{% else %}Not configured{% endif %}</strong> · Playwright: <strong>{% if playwright_installed %}Installed{% else %}Missing{% endif %}</strong></div><button id="sync">Sync Canva designs</button></div>
 {% if not state_saved %}<p class="notice">Run <code>python manage.py canva_browser_login</code> on a machine with a visible browser. Sign in yourself and complete verification.</p>{% endif %}
 <p class="notice">MP4 export depends on Canva's UI labels and design type. A thumbnail is never treated as a complete animation.</p><p id="message" role="status"></p>
