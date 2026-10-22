@@ -2,3 +2,7 @@ env/
 .env
 __pycache__/
 media/
+venv/
+private/browser_states/
+playwright/.auth/
+*.state.json
