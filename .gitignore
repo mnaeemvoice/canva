@@ -6,3 +6,5 @@ venv/
 private/browser_states/
 playwright/.auth/
 *.state.json
+.venv/
+*.py[cod]
