@@ -10,8 +10,11 @@ urlpatterns = [
     # HOME
     path('', home, name='home'),
 
-    # API ROUTES
+    # Existing API routes
     path('api/', include('api.urls')),
+
+    # Playwright-based Canva browser automation (staff-only endpoints)
+    path('api/browser/', include('api.browser_automation_urls')),
 ]
 
 # ======================
