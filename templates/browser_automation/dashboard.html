@@ -82,6 +82,18 @@ async function remoteRefresh(){
     if(!remoteTimer){remoteState.textContent='Browser stopped';remoteControls.forEach(id=>document.getElementById(id).disabled=true);document.getElementById('remote-start').disabled=false;}
   } finally {remoteBusy=false;}
 }
+async function remoteResumeIfRunning(){
+  try {
+    const r=await fetch('/api/browser/remote/status/'); const d=await r.json();
+    if(r.ok&&d.success&&d.running){
+      document.getElementById('remote-start').disabled=true;
+      remoteMsg.textContent='Reconnecting to the running server-side Canva browser…';
+      await remoteRefresh();
+      if(remoteTimer)clearInterval(remoteTimer);
+      remoteTimer=setInterval(remoteRefresh,1800);
+    }
+  } catch(e) { /* A stopped browser is the normal first-load state. */ }
+}
 document.getElementById('remote-start').addEventListener('click',async()=>{
   const b=document.getElementById('remote-start');b.disabled=true;remoteMsg.textContent='Starting server-side Chromium…';
   try {const r=await fetch('/api/browser/remote/start/',{method:'POST',headers:{'X-CSRFToken':csrf}});const d=await r.json();if(!r.ok||!d.success)throw new Error(d.error+(d.detail?' — '+d.detail:''));remoteMsg.textContent='Browser started. Sign into Canva in the screen below.';await remoteRefresh();if(remoteTimer)clearInterval(remoteTimer);remoteTimer=setInterval(remoteRefresh,1200);}
@@ -108,6 +120,7 @@ remoteImg.addEventListener('pointerup',async e=>{
 });
 remoteImg.addEventListener('wheel',async e=>{e.preventDefault();try{await remotePost('wheel',{delta_x:e.deltaX,delta_y:e.deltaY});setTimeout(remoteRefresh,200);}catch(err){remoteMsg.textContent=err.message;}},{passive:false});
 
+remoteResumeIfRunning();
 document.getElementById('sync').addEventListener('click',async function(){const btn=this;btn.disabled=true;message.textContent='Opening Canva and scanning your designs…';try{const r=await fetch('/api/browser/canva/sync/',{method:'POST',headers:{'X-CSRFToken':csrf}});const d=await r.json();message.textContent=d.success?('Found '+d.found+' designs · '+d.created+' new · '+d.updated+' updated. Reloading…'):((d.error||'Sync failed')+'\n'+(d.next_step||d.detail||''));if(d.success)setTimeout(()=>location.reload(),900)}catch(e){message.textContent='Sync request failed: '+e}finally{btn.disabled=false}});
 document.querySelectorAll('.export-form').forEach(form=>form.addEventListener('submit',async function(e){e.preventDefault();const btn=form.querySelector('button');btn.disabled=true;message.textContent='Exporting MP4 from Canva. Animated designs can take a few minutes…';try{const r=await fetch(form.action,{method:'POST',headers:{'X-CSRFToken':csrf}});const d=await r.json();message.textContent=d.success?('MP4 exported and stored ('+Math.round(d.size_bytes/1024/1024*100)/100+' MB). Reloading…'):((d.error||'Export failed')+'\n'+(d.detail||''));if(d.success)setTimeout(()=>location.reload(),1200)}catch(e){message.textContent='Export request failed: '+e}finally{btn.disabled=false}}));
 document.querySelectorAll('.publish-form').forEach(form=>form.addEventListener('submit',async function(e){e.preventDefault();const btn=form.querySelector('button');const out=form.querySelector('.result');const platform=form.querySelector('[name="platform"]').value;btn.disabled=true;out.textContent='Sending media to '+platform+'…';try{const r=await fetch('/api/social/unified-post/',{method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':csrf},body:JSON.stringify({platform,content_type:form.dataset.type,design_id:form.dataset.design,caption:form.querySelector('[name="caption"]').value})});const d=await r.json();if(r.ok&&d.success){out.textContent='Published successfully. '+(d.post_url||'');out.style.color='var(--green)'}else{out.textContent=(d.error||d.message||'Publishing failed')+(d.message&&d.error?' — '+d.message:'');out.style.color='#ffc3d2'}}catch(e){out.textContent='Publishing request failed: '+e;out.style.color='#ffc3d2'}finally{btn.disabled=false}}));
