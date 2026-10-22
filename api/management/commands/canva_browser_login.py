@@ -1,7 +1,8 @@
-"""Open Canva in a visible browser, let the owner sign in, then save state.
+"""Open Canva in Selenium's visible Chrome and keep its profile for future sessions.
 
-Run on a machine that can display the browser, or through an authorized VNC
-session: python manage.py canva_browser_login
+Run: python manage.py canva_browser_login
+Complete login and verification yourself. The Chrome profile contains sensitive
+authentication data and must never be committed or shared.
 """
 import os
 from pathlib import Path
@@ -11,49 +12,52 @@ from django.core.management.base import BaseCommand, CommandError
 
 
 class Command(BaseCommand):
-    help = "Log into Canva manually once and save a Playwright browser state file."
+    help = "Open Canva in Chrome for manual sign-in using a persistent Selenium profile."
 
     def handle(self, *args, **options):
         try:
-            from playwright.sync_api import sync_playwright
+            from selenium import webdriver
+            from selenium.webdriver.chrome.options import Options
         except ImportError as exc:
-            raise CommandError(
-                "Playwright is missing. Install it with pip install playwright "
-                "and run python -m playwright install chromium."
-            ) from exc
+            raise CommandError("Selenium is missing. Install requirements.txt first.") from exc
 
         state_dir = Path(os.getenv(
-            "CANVA_PLAYWRIGHT_STATE_DIR",
+            "CANVA_SELENIUM_STATE_DIR",
             str(Path(settings.BASE_DIR) / "private" / "browser_states"),
         ))
-        state_dir.mkdir(parents=True, exist_ok=True)
+        profile_dir = Path(os.getenv("CANVA_SELENIUM_PROFILE_DIR", str(state_dir / "chrome-profile")))
+        profile_dir.mkdir(parents=True, exist_ok=True)
         try:
             os.chmod(state_dir, 0o700)
+            os.chmod(profile_dir, 0o700)
         except OSError:
             pass
-        state_file = state_dir / "canva-storage-state.json"
 
-        self.stdout.write(self.style.WARNING(
-            "A visible Chromium window will open. Sign into your own Canva account. "
-            "Complete verification yourself; do not share the session file."
-        ))
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=False)
-            context = browser.new_context(accept_downloads=True)
-            page = context.new_page()
-            page.goto("https://www.canva.com/login", wait_until="domcontentloaded")
-            self.stdout.write("After signing in, open Your designs. Return here and press Enter.")
-            input()
-            if "canva.com" not in page.url or "/login" in page.url.lower() or "/signup" in page.url.lower():
-                browser.close()
+        options = Options()
+        options.add_argument(f"--user-data-dir={profile_dir.resolve()}")
+        options.add_argument("--window-size=1440,900")
+        options.add_argument("--disable-notifications")
+        options.add_argument("--no-first-run")
+        if os.getenv("CANVA_HEADLESS", "0").strip().lower() in {"1", "true", "yes"}:
+            options.add_argument("--headless=new")
+
+        driver = None
+        try:
+            self.stdout.write(self.style.WARNING(
+                "Chrome will open. Sign into Canva manually and complete any verification yourself. "
+                "Do not share or commit the Chrome profile."
+            ))
+            driver = webdriver.Chrome(options=options)
+            driver.get("https://www.canva.com/login")
+            input("After login, return to this terminal and press Enter to close Chrome: ")
+            if "canva.com" not in driver.current_url:
                 raise CommandError("Canva login was not detected.")
-            context.storage_state(path=str(state_file))
-            try:
-                os.chmod(state_file, 0o600)
-            except OSError:
-                pass
-            browser.close()
+        except KeyboardInterrupt:
+            self.stdout.write("\nLogin setup cancelled.")
+        finally:
+            if driver:
+                driver.quit()
 
         self.stdout.write(self.style.SUCCESS(
-            "Playwright state saved to " + str(state_file) + ". Keep it private and outside Git."
+            f"Persistent Selenium Chrome profile is stored privately at: {profile_dir}"
         ))
