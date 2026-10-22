@@ -73,8 +73,8 @@ async function remoteRefresh(){
   try {
     const r=await fetch('/api/browser/remote/screenshot/'); const d=await r.json();
     if(!r.ok||!d.success)throw new Error(d.error||'Browser not started');
-    remoteImg.src=d.image; remoteImg.hidden=false; remoteState.textContent='Running · '+(d.title||d.url||'Canva');
-    remoteMsg.textContent=d.url||'Canva browser running';
+    remoteImg.src=d.image; remoteImg.hidden=false; remoteState.textContent='Running · Selenium'+(d.playwright_attached?' + Playwright':'');
+    remoteMsg.textContent=(d.url||'Canva browser running')+(d.playwright_attached?' · Playwright connected to the same Chrome session':(d.playwright_error?' · Playwright unavailable: '+d.playwright_error:''));
     remoteControls.forEach(id=>document.getElementById(id).disabled=false);
     document.getElementById('remote-start').disabled=true;
   } catch(e) {
@@ -100,7 +100,7 @@ document.getElementById('remote-start').addEventListener('click',async()=>{
   catch(e){remoteMsg.textContent=e.message;b.disabled=false;}
 });
 document.getElementById('remote-refresh').addEventListener('click',remoteRefresh);
-document.getElementById('remote-save').addEventListener('click',async()=>{try{await remotePost('save_session');remoteMsg.textContent='Canva session saved privately on the server.';remoteState.textContent='Session saved';}catch(e){remoteMsg.textContent=e.message;}});
+document.getElementById('remote-save').addEventListener('click',async()=>{try{const d=await remotePost('save_session');remoteMsg.textContent=d.playwright_state_saved?'Chrome profile and Playwright storage state saved privately.':'Chrome profile saved. Playwright state not exported'+(d.playwright_error?': '+d.playwright_error:'.');remoteState.textContent=d.playwright_state_saved?'Selenium + Playwright · Session saved':'Selenium · Session saved';}catch(e){remoteMsg.textContent=e.message;}});
 document.getElementById('remote-stop').addEventListener('click',async()=>{try{await remotePost('stop');if(remoteTimer)clearInterval(remoteTimer);remoteTimer=null;remoteImg.hidden=true;remoteState.textContent='Browser stopped';remoteControls.forEach(id=>document.getElementById(id).disabled=true);document.getElementById('remote-start').disabled=false;remoteMsg.textContent='Remote browser stopped.';}catch(e){remoteMsg.textContent=e.message;}});
 document.getElementById('remote-type').addEventListener('click',async()=>{try{await remotePost('type',{text:document.getElementById('remote-text').value});remoteMsg.textContent='Text sent to Canva browser.';await remoteRefresh();}catch(e){remoteMsg.textContent=e.message;}});
 document.getElementById('remote-send-key').addEventListener('click',async()=>{try{await remotePost('key',{key:document.getElementById('remote-key').value});await remoteRefresh();}catch(e){remoteMsg.textContent=e.message;}});
