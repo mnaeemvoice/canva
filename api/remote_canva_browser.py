@@ -36,9 +36,9 @@ class CanvaBrowserWorker:
         self.thread = threading.Thread(target=self._run, name="canva-browser-worker", daemon=True)
         self.thread.start()
 
-    def call(self, action, owner_id=None, **payload):
+    def call(self, command, owner_id=None, **payload):
         future = Future()
-        self.commands.put((future, action, owner_id, payload))
+        self.commands.put((future, command, owner_id, payload))
         return future.result(timeout=90)
 
     def _run(self):
