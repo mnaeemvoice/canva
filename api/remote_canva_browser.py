@@ -56,7 +56,8 @@ class CanvaBrowserWorker:
                     else:
                         from playwright.sync_api import sync_playwright
                         playwright = sync_playwright().start()
-                        browser = playwright.chromium.launch(headless=True)
+                        headless = os.getenv("CANVA_HEADLESS", "1").strip().lower() not in {"0", "false", "no"}
+                        browser = playwright.chromium.launch(headless=headless)
                         context_args = {"accept_downloads": True, "viewport": VIEWPORT}
                         if STATE_FILE.is_file():
                             context_args["storage_state"] = str(STATE_FILE)
