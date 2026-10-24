@@ -14,6 +14,7 @@ from django.views.decorators.http import require_GET, require_POST
 from django.views.decorators.csrf import csrf_protect
 
 from .models import CanvaDesign
+from .remote_canva_browser import _get_worker
 
 STATE_DIR = Path(os.getenv(
     "CANVA_PLAYWRIGHT_STATE_DIR",
@@ -67,81 +68,30 @@ def _extract_designs(page):
 @csrf_protect
 @require_POST
 def browser_sync_canva_designs(request):
-    """Reuse the saved session to discover designs and persist metadata."""
-    if not STATE_FILE.is_file():
-        return JsonResponse({
-            "success": False,
-            "error": "Canva browser session is not configured.",
-            "next_step": "Run python manage.py canva_browser_login on a machine with a visible browser and sign into Canva.",
-        }, status=409)
-    if not _playwright_available():
-        return JsonResponse({
-            "success": False,
-            "error": "Playwright is not installed.",
-            "next_step": "Install requirements and run python -m playwright install chromium.",
-        }, status=503)
+    """Sync design metadata from the same live Selenium browser shown in the dashboard.
 
+    This avoids starting a separate headless browser with a potentially stale
+    storage-state file. The user completes Canva login and any verification
+    manually in the remote browser first.
+    """
     try:
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
-            context = browser.new_context(storage_state=str(STATE_FILE), accept_downloads=True)
-            page = context.new_page()
-            page.goto(CANVA_DESIGNS_URL, wait_until="domcontentloaded", timeout=60000)
-            page.wait_for_timeout(2500)
-
-            current_url = page.url
-            if "login" in current_url.lower() or "signup" in current_url.lower():
-                browser.close()
-                return JsonResponse({
-                    "success": False,
-                    "session_expired": True,
-                    "error": "Canva requires login again.",
-                    "next_step": "Run python manage.py canva_browser_login and sign in again.",
-                }, status=409)
-
-            designs = _extract_designs(page)
-            created = updated = 0
-            for item in designs:
-                design_id = item.get("id")
-                if not design_id:
-                    continue
-                title = item.get("title") or "Canva design " + design_id
-                obj, was_created = CanvaDesign.objects.update_or_create(
-                    design_id=design_id,
-                    defaults={
-                        "title": title,
-                        "category": "unknown",
-                        "asset_type": "unknown",
-                        "status": "browser_discovered",
-                        "raw_data": {
-                            "source": "playwright_browser",
-                            "edit_url": item.get("edit_url"),
-                            "discovered_at": timezone.now().isoformat(),
-                            "export_note": "Metadata sync is complete; use the dashboard MP4 export action to retrieve the full file.",
-                        },
-                        "last_modified": timezone.now(),
-                    },
-                )
-                if was_created:
-                    created += 1
-                else:
-                    updated += 1
-
-            context.close()
-            browser.close()
+        result = _get_worker().call(
+            "input",
+            request.user.pk,
+            action="sync_designs",
+        )
+        status = result.pop("status", 200)
+        return JsonResponse(result, status=status)
+    except TimeoutError:
         return JsonResponse({
-            "success": True,
-            "found": len(designs),
-            "created": created,
-            "updated": updated,
-            "designs": designs[:100],
-            "message": "Design metadata synced. Use the dashboard Export MP4 action to retrieve a complete video file where Canva offers MP4 export.",
-        })
+            "success": False,
+            "error": "Canva sync timed out.",
+            "next_step": "Wait for Canva's Your designs page to finish loading and retry.",
+        }, status=504)
     except Exception as exc:
         return JsonResponse({
             "success": False,
             "error": "Canva browser sync failed.",
-            "detail": str(exc)[:500],
-            "next_step": "Check the saved session and whether Canva's design page loaded successfully.",
+            "detail": str(exc)[:400],
+            "next_step": "Open Canva in Selenium, finish any verification manually, open Your designs, and retry.",
         }, status=502)

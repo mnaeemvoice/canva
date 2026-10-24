@@ -1,59 +1,68 @@
-"""Open Canva in a visible browser, let the owner sign in, then save state.
+"""Save an authenticated Canva browser session for sync and MP4 export.
 
-Run on a machine that can display the browser, or through an authorized VNC
-session: python manage.py canva_browser_login
+Run: python manage.py canva_browser_login
+Sign in to your own Canva account manually. The storage-state file contains
+session credentials and must never be committed or shared.
 """
-import os
 from pathlib import Path
 
-from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
+
+from api.browser_automation import CANVA_DESIGNS_URL, STATE_FILE
 
 
 class Command(BaseCommand):
-    help = "Log into Canva manually once and save a Playwright browser state file."
+    help = "Open Chromium for manual Canva sign-in and save the private browser session."
 
     def handle(self, *args, **options):
         try:
             from playwright.sync_api import sync_playwright
         except ImportError as exc:
             raise CommandError(
-                "Playwright is missing. Install it with pip install playwright "
-                "and run python -m playwright install chromium."
+                "Playwright is missing. Install it with "
+                "./venv/bin/python -m pip install playwright"
             ) from exc
 
-        state_dir = Path(os.getenv(
-            "CANVA_PLAYWRIGHT_STATE_DIR",
-            str(Path(settings.BASE_DIR) / "private" / "browser_states"),
-        ))
-        state_dir.mkdir(parents=True, exist_ok=True)
+        state_path = Path(STATE_FILE)
+        state_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            os.chmod(state_dir, 0o700)
+            state_path.parent.chmod(0o700)
         except OSError:
             pass
-        state_file = state_dir / "canva-storage-state.json"
 
         self.stdout.write(self.style.WARNING(
-            "A visible Chromium window will open. Sign into your own Canva account. "
-            "Complete verification yourself; do not share the session file."
+            "A browser will open. Sign in to Canva manually and complete any verification. "
+            "Do not share or commit the saved browser session."
         ))
+
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=False)
-            context = browser.new_context(accept_downloads=True)
+            context = browser.new_context()
             page = context.new_page()
-            page.goto("https://www.canva.com/login", wait_until="domcontentloaded")
-            self.stdout.write("After signing in, open Your designs. Return here and press Enter.")
-            input()
-            if "canva.com" not in page.url or "/login" in page.url.lower() or "/signup" in page.url.lower():
-                browser.close()
-                raise CommandError("Canva login was not detected.")
-            context.storage_state(path=str(state_file))
             try:
-                os.chmod(state_file, 0o600)
-            except OSError:
-                pass
-            browser.close()
-
-        self.stdout.write(self.style.SUCCESS(
-            "Playwright state saved to " + str(state_file) + ". Keep it private and outside Git."
-        ))
+                page.goto(
+                    CANVA_DESIGNS_URL,
+                    wait_until="domcontentloaded",
+                    timeout=60000,
+                )
+                input(
+                    "\nAfter you finish signing in and can see your Canva designs, "
+                    "return here and press ENTER to save the session..."
+                )
+                if "canva.com" not in page.url.lower() or any(
+                    marker in page.url.lower() for marker in ("/login", "/signup")
+                ):
+                    raise CommandError(
+                        "Canva login was not detected. Sign in and open Your designs before saving."
+                    )
+                context.storage_state(path=str(state_path))
+                try:
+                    state_path.chmod(0o600)
+                except OSError:
+                    pass
+                self.stdout.write(self.style.SUCCESS(
+                    f"Canva session saved privately to {state_path}"
+                ))
+            finally:
+                context.close()
+                browser.close()

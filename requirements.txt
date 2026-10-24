@@ -5,7 +5,10 @@ Django==6.0.4
 djangorestframework==3.17.1
 idna==3.13
 python-dotenv==1.2.2
+selenium>=4.20,<5
 playwright>=1.50,<2
+undetected-chromedriver>=3.5.5
+selenium-stealth>=1.0.6
 requests==2.33.1
 sqlparse==0.5.5
 urllib3==2.6.3

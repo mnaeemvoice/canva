@@ -59,6 +59,7 @@ from .views import (
     upload_video_to_platform,
     share_video_direct,
 )
+from . import browser_automation
 
 urlpatterns = [
     path('canva/login/', canva_login),
@@ -207,4 +208,6 @@ urlpatterns = [
     # 🔥 LEGACY: Old sync endpoints (kept for compatibility)
     path('canva/sync-designs/', sync_canva_designs),
     path('canva/sync-by-url/', sync_design_by_url),
+    path('browser/', browser_automation.browser_automation_status),
+    path('browser/canva/sync/', browser_automation.browser_sync_canva_designs),
 ]

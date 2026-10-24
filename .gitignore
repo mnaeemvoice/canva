@@ -6,3 +6,6 @@ venv/
 private/browser_states/
 playwright/.auth/
 *.state.json
+.venv/
+*.py[cod]
+private/browser_states/canva-storage-state.json
