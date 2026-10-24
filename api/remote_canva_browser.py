@@ -328,6 +328,75 @@ class CanvaBrowserWorker:
                             "injected": injected,
                             "total": len(canva_cookies),
                         }
+                    elif kind == "sync_designs":
+                        # Sync from the same live Selenium browser the user can see.
+                        # The user must complete Canva login/verification manually first.
+                        from django.utils import timezone
+                        from .models import CanvaDesign
+
+                        current_url = driver.current_url
+                        if "canva.com" not in urlparse(current_url).hostname.lower():
+                            raise ValueError("Open Canva in the remote browser before syncing.")
+                        if any(term in current_url.lower() for term in ("/login", "/signup", "challenge")):
+                            raise ValueError("Canva login or verification is still required. Complete it in the browser, open Your designs, then retry.")
+                        if "/your-designs" not in current_url.lower():
+                            driver.get("https://www.canva.com/your-designs")
+                            import time as _time
+                            _time.sleep(3)
+
+                        # Extract only design links rendered in the signed-in page DOM.
+                        items = driver.execute_script(r"""
+                            const found = new Map();
+                            for (const a of document.querySelectorAll('a[href*="/design/"]')) {
+                              const href = a.href || "";
+                              const m = href.match(/\/design\/([A-Za-z0-9_-]+)(?:\/|\?|$)/);
+                              if (!m) continue;
+                              const id = m[1];
+                              const title = (a.getAttribute("aria-label") || a.innerText ||
+                                a.querySelector("img")?.alt || "").trim().slice(0, 255);
+                              if (!found.has(id)) found.set(id, {id, title, edit_url: href});
+                            }
+                            return Array.from(found.values());
+                        """)
+                        if not items:
+                            page_text = (driver.find_element("tag name", "body").text or "")[:500].lower()
+                            if any(term in page_text for term in ("verify you are human", "checking your browser", "security challenge", "captcha")):
+                                raise ValueError("Cloudflare verification is visible. Complete it manually in the browser, wait for Your designs to load, then retry sync.")
+                            raise ValueError("No design links were found on Canva's page. Confirm you are signed in and the Your designs grid has finished loading.")
+                        created = updated = 0
+                        for item in items:
+                            design_id = item.get("id")
+                            if not design_id:
+                                continue
+                            title = item.get("title") or ("Canva design " + design_id)
+                            _, was_created = CanvaDesign.objects.update_or_create(
+                                design_id=design_id,
+                                defaults={
+                                    "title": title,
+                                    "category": "unknown",
+                                    "asset_type": "unknown",
+                                    "status": "browser_discovered",
+                                    "raw_data": {
+                                        "source": "selenium_live_browser",
+                                        "edit_url": item.get("edit_url"),
+                                        "discovered_at": timezone.now().isoformat(),
+                                        "export_note": "Metadata synced from the signed-in browser. Use Export MP4 where Canva offers MP4 export.",
+                                    },
+                                    "last_modified": timezone.now(),
+                                },
+                            )
+                            if was_created:
+                                created += 1
+                            else:
+                                updated += 1
+                        result = {
+                            "success": True,
+                            "found": len(items),
+                            "created": created,
+                            "updated": updated,
+                            "designs": items[:100],
+                            "message": "Design metadata synced from the live signed-in Canva browser.",
+                        }
                     elif kind == "save_session":
                         # Keep Chrome's profile and export Playwright state for other workflows.
                         session_saved = False
@@ -361,10 +430,12 @@ class CanvaBrowserWorker:
                     else:
                         raise ValueError("Unknown action.")
                     last_error = ""
-                    if kind not in {"stop", "save_session"}:
+                    if kind not in {"stop", "save_session", "sync_designs"}:
                         result = self._status(driver, last_error)
                         result["playwright_attached"] = pw_page is not None
                         result["playwright_error"] = playwright_error
+                    elif kind == "sync_designs":
+                        result.update(self._status(driver, last_error))
                     elif kind == "save_session":
                         result.update(self._status(driver, last_error))
                 else:
