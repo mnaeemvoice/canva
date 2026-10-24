@@ -46,7 +46,7 @@ class CanvaBrowserWorker:
     def call(self, command, owner_id=None, **payload):
         future = Future()
         self.commands.put((future, command, owner_id, payload))
-        return future.result(timeout=90)
+        return future.result(timeout=180) # Increased timeout to 180s
 
     def _run(self):
         driver = None
@@ -65,72 +65,124 @@ class CanvaBrowserWorker:
                         if owner_id != caller_id:
                             raise PermissionError("Remote browser is owned by another staff user.")
                     else:
-                        from selenium import webdriver
+                        import undetected_chromedriver as uc
+                        from selenium.common.exceptions import SessionNotCreatedException
                         from selenium.webdriver.chrome.options import Options
+                        from selenium_stealth import stealth
+
                         PROFILE_DIR.mkdir(parents=True, exist_ok=True)
                         try:
                             os.chmod(STATE_DIR, 0o700)
                             os.chmod(PROFILE_DIR, 0o700)
                         except OSError:
                             pass
-                        options = Options()
-                        # Selenium Manager does not always discover Chromium/Chrome on
-                        # Linux installations that use non-standard package paths.
-                        # Prefer an explicit env override, otherwise detect common binaries.
-                        configured_binary = os.getenv("CHROME_BINARY", "").strip()
+
+                        # Clear the profile directory to avoid "in use" locks if previous run crashed
+                        try:
+                            if PROFILE_DIR.exists():
+                                # Instead of deleting everything, just remove the SingletonLock
+                                lock_file = PROFILE_DIR / "SingletonLock"
+                                if lock_file.exists():
+                                    lock_file.unlink()
+                        except Exception:
+                            pass
+
+                        # Match actual Chromium version
+                        chrome_version_cmd = os.popen("google-chrome --version || chromium-browser --version || chromium --version").read().strip()
+                        system_version = chrome_version_cmd.split()[-1] if chrome_version_cmd else "155.0.0.0"
+                        major_version = int(system_version.split('.')[0]) if system_version.split('.')[0].isdigit() else 155
+                        _UA = f"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{system_version} Safari/537.36"
+
+                        # Try to find the best binary path
+                        chrome_binary = None
                         candidates = [
-                            configured_binary,
-                            shutil.which("google-chrome"),
-                            shutil.which("google-chrome-stable"),
-                            shutil.which("chrome"),
-                            shutil.which("chromium"),
-                            shutil.which("chromium-browser"),
+                            "/snap/chromium/current/usr/lib/chromium-browser/chrome",
                             "/usr/bin/google-chrome",
-                            "/usr/bin/google-chrome-stable",
-                            "/usr/bin/chromium",
                             "/usr/bin/chromium-browser",
-                            "/snap/bin/chromium",
-                            "/opt/google/chrome/chrome",
+                            "/usr/bin/chromium",
                         ]
-                        chrome_binary = next(
-                            (candidate for candidate in candidates if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK)),
-                            None,
-                        )
-                        if not chrome_binary:
-                            raise RuntimeError(
-                                "Chrome/Chromium binary was not found. Install Google Chrome or Chromium, "
-                                "or set CHROME_BINARY to its executable path (for example /usr/bin/chromium)."
-                            )
-                        options.binary_location = chrome_binary
-                        options.add_argument(f"--user-data-dir={PROFILE_DIR.resolve()}")
-                        options.add_argument(f"--window-size={VIEWPORT['width']},{VIEWPORT['height']}")
-                        options.add_argument("--disable-notifications")
-                        options.add_argument("--no-first-run")
-                        options.add_argument("--no-default-browser-check")
+                        for c in candidates:
+                            if os.path.exists(c):
+                                chrome_binary = c
+                                break
+
+                        def create_options(profile_path):
+                            opt = uc.ChromeOptions()
+                            opt.add_argument(f"--user-data-dir={profile_path}")
+                            opt.add_argument(f"--window-size={VIEWPORT['width']},{VIEWPORT['height']}")
+                            opt.add_argument("--disable-notifications")
+                            opt.add_argument("--no-first-run")
+                            opt.add_argument("--no-default-browser-check")
+                            opt.add_argument("--no-sandbox")
+                            opt.add_argument("--disable-dev-shm-usage")
+                            opt.add_argument(f"--user-agent={_UA}")
+                            opt.add_argument("--disable-blink-features=AutomationControlled")
+                            opt.add_argument("--disable-infobars")
+                            return opt
+
                         headless = os.getenv("CANVA_HEADLESS", "0").strip().lower() in {"1", "true", "yes"}
-                        if headless:
-                            options.add_argument("--headless=new")
-                        driver = webdriver.Chrome(options=options)
+                        
+                        # Fallback logic for locked profiles
+                        try:
+                            driver = uc.Chrome(
+                                options=create_options(str(PROFILE_DIR.resolve())),
+                                headless=True, # Force headless for stability on server
+                                version_main=major_version,
+                                browser_executable_path=chrome_binary
+                            )
+                        except Exception as exc:
+                            # Try with a temporary profile if the main one is locked
+                            import tempfile
+                            temp_profile = tempfile.mkdtemp(prefix="canva-chrome-")
+                            try:
+                                driver = uc.Chrome(
+                                    options=create_options(temp_profile),
+                                    headless=True,
+                                    version_main=major_version,
+                                    browser_executable_path=chrome_binary
+                                )
+                            except Exception as exc2:
+                                raise RuntimeError(
+                                    f"Undetected ChromeDriver could not start. "
+                                    f"Original error: {exc2}"
+                                ) from exc2
+
+                        # ── selenium-stealth (additional fingerprint masking) ─────────
+                        try:
+                            stealth(
+                                driver,
+                                languages=["en-US", "en"],
+                                vendor="Google Inc.",
+                                platform="Linux x86_64",
+                                webgl_vendor="Intel Inc.",
+                                renderer="Intel Iris OpenGL Engine",
+                                fix_hairline=True,
+                            )
+                        except Exception:
+                            pass
+
                         driver.set_window_size(VIEWPORT["width"], VIEWPORT["height"])
                         owner_id = caller_id
+                        
+                        # Add a small delay and use a more natural navigation
+                        import time as _time
                         driver.get(CANVA_URL)
+                        _time.sleep(2)
                         # Attach Playwright to the SAME Chrome started by Selenium.
-                        # Selenium remains the visible/manual control layer; Playwright
-                        # supplies DOM-aware inspection and storage-state persistence.
+                        # This is optional — don't crash the whole worker if it fails.
                         try:
                             from playwright.sync_api import sync_playwright
                             playwright = sync_playwright().start()
                             debugger_address = driver.capabilities.get("goog:chromeOptions", {}).get("debuggerAddress")
-                            if not debugger_address:
-                                raise RuntimeError("ChromeDriver did not expose a CDP debugger address.")
-                            pw_browser = playwright.chromium.connect_over_cdp("http://" + debugger_address)
-                            pw_context = pw_browser.contexts[0] if pw_browser.contexts else None
-                            pw_page = pw_context.pages[0] if pw_context and pw_context.pages else None
-                            if pw_page is None:
-                                raise RuntimeError("Playwright attached, but no Canva tab was found.")
-                            playwright_error = ""
+                            if debugger_address:
+                                pw_browser = playwright.chromium.connect_over_cdp("http://" + debugger_address)
+                                pw_context = pw_browser.contexts[0] if pw_browser.contexts else None
+                                pw_page = pw_context.pages[0] if pw_context and pw_context.pages else None
+                                playwright_error = ""
+                            else:
+                                playwright_error = "No CDP debugger address found."
                         except Exception as exc:
-                            playwright_error = f"{type(exc).__name__}: {exc}"[:300]
+                            playwright_error = f"Playwright attachment failed: {exc}"[:300]
                             if playwright:
                                 try:
                                     playwright.stop()
@@ -190,7 +242,92 @@ class CanvaBrowserWorker:
                         parsed = urlparse(str(payload.get("url", "")))
                         if parsed.scheme != "https" or parsed.hostname not in {"canva.com", "www.canva.com"}:
                             raise ValueError("Only https://www.canva.com pages are allowed.")
+                        
+                        # Add a small delay to seem more human
+                        import time as _time
+                        import random as _random
+                        _time.sleep(_random.uniform(0.5, 1.5))
                         driver.get(parsed.geturl())
+                    elif kind == "inject_cookies":
+                        # Inject cookies from the user's real browser into Selenium.
+                        # Payload: {"cookies": [{name, value, domain, path, ...}, ...]}
+                        import json as _json
+                        raw_cookies = payload.get("cookies", [])
+                        if not isinstance(raw_cookies, list):
+                            raise ValueError("cookies must be a JSON array.")
+                        # Navigate to canva.com first so we are on the right domain.
+                        driver.get("https://www.canva.com")
+                        import time as _time
+                        _time.sleep(2)
+                        driver.delete_all_cookies()
+                        injected = 0
+                        for ck in raw_cookies:
+                            try:
+                                cookie = {
+                                    "name": str(ck.get("name", "")),
+                                    "value": str(ck.get("value", "")),
+                                    "domain": str(ck.get("domain", ".canva.com")),
+                                    "path": str(ck.get("path", "/")),
+                                }
+                                if ck.get("secure"):
+                                    cookie["secure"] = True
+                                if ck.get("httpOnly"):
+                                    cookie["httpOnly"] = True
+                                if ck.get("expirationDate"):
+                                    cookie["expiry"] = int(ck["expirationDate"])
+                                elif ck.get("expires") and ck["expires"] > 0:
+                                    cookie["expiry"] = int(ck["expires"])
+                                driver.add_cookie(cookie)
+                                injected += 1
+                            except Exception:
+                                pass
+                        driver.get("https://www.canva.com/your-designs")
+                        result = {
+                            "success": True,
+                            "injected": injected,
+                            "total": len(raw_cookies),
+                        }
+                    elif kind == "load_saved_session":
+                        # Load cookies from the saved Playwright storage-state JSON.
+                        if not PLAYWRIGHT_STATE_FILE.exists():
+                            raise ValueError("No saved session file found. Save a session first.")
+                        import json as _json
+                        state = _json.loads(PLAYWRIGHT_STATE_FILE.read_text())
+                        canva_cookies = [
+                            c for c in state.get("cookies", [])
+                            if "canva.com" in c.get("domain", "")
+                        ]
+                        if not canva_cookies:
+                            raise ValueError("Saved session has no Canva cookies.")
+                        driver.get("https://www.canva.com")
+                        import time as _time
+                        _time.sleep(2)
+                        driver.delete_all_cookies()
+                        injected = 0
+                        for c in canva_cookies:
+                            try:
+                                cookie = {
+                                    "name": c["name"],
+                                    "value": c["value"],
+                                    "domain": c.get("domain", ".canva.com"),
+                                    "path": c.get("path", "/"),
+                                }
+                                if c.get("secure"):
+                                    cookie["secure"] = True
+                                if c.get("httpOnly"):
+                                    cookie["httpOnly"] = True
+                                if c.get("expires", -1) > 0:
+                                    cookie["expiry"] = int(c["expires"])
+                                driver.add_cookie(cookie)
+                                injected += 1
+                            except Exception:
+                                pass
+                        driver.get("https://www.canva.com/your-designs")
+                        result = {
+                            "success": True,
+                            "injected": injected,
+                            "total": len(canva_cookies),
+                        }
                     elif kind == "save_session":
                         # Keep Chrome's profile and export Playwright state for other workflows.
                         session_saved = False

@@ -46,6 +46,11 @@ WebSocket/WebRTC streaming with an authenticated gateway. Do not expose these
 endpoints to non-staff users or the public internet without a security review.
 Headless Chromium may be challenged by Canva, and this implementation has not
 been live-tested against all Canva account/login flows.
+The remote Selenium browser needs an installed Chrome/Chromium binary and a
+compatible ChromeDriver. If ChromeDriver cannot see the initially selected
+browser binary or cannot start it, the launcher tries the other detected
+browser binaries. Set `CHROME_BINARY` to force a specific executable; it will
+not fall back to another browser when that override is set.
 
 ## Endpoints
 
