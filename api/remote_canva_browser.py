@@ -329,61 +329,114 @@ class CanvaBrowserWorker:
                             "total": len(canva_cookies),
                         }
                     elif kind == "sync_designs":
-                        # Never navigate the user's visible browser during sync.
-                        # On Your designs, collect visible design cards. In an editor,
-                        # sync the design currently open from its real Canva URL.
+                        # Background browser automation: Selenium owns the visible browser,
+                        # while Playwright scans Canva's website in a separate headless browser.
+                        # This uses Canva's normal UI/DOM, not Canva's API, and never navigates
+                        # or scrolls the visible Selenium screen.
                         from django.utils import timezone
                         from .models import CanvaDesign
-                        import re
                         import time as _time
 
-                        current_url = driver.current_url
-                        parsed_url = urlparse(current_url)
-                        hostname = (parsed_url.hostname or "").lower()
-                        if hostname not in {"canva.com", "www.canva.com"}:
-                            raise ValueError("Open Canva in the remote browser first. Sync will not navigate the browser for you.")
-                        if any(term in current_url.lower() for term in ("/login", "/signup", "challenge")):
-                            raise ValueError("Canva login or verification is still required. Complete it manually, then retry sync.")
+                        if driver is None:
+                            raise ValueError("Start the Selenium browser and sign in to Canva first.")
+                        if pw_context is None or playwright is None:
+                            raise ValueError(
+                                "Playwright is not attached to Selenium. Stop and restart the browser, "
+                                "then sign in and click Save Canva session."
+                            )
 
-                        # If the user is already editing a design, sync that exact design
-                        # and leave the editor open. Do not redirect them to Your designs.
-                        editor_match = re.search(r"/design/([A-Za-z0-9_-]+)(?:/edit|/view|[/?#]|$)", parsed_url.path)
-                        if editor_match:
-                            design_id = editor_match.group(1)
-                            title = driver.execute_script("""
-                                const title = document.querySelector('[contenteditable="true"][aria-label*="title" i]')?.innerText
-                                  || document.querySelector('input[aria-label*="title" i]')?.value
-                                  || document.title || '';
-                                return String(title).replace(/\\s*[-|]\\s*Canva.*$/i, '').trim().slice(0,255);
-                            """) or ("Canva design " + design_id)
-                            items = [{"id": design_id, "title": title, "edit_url": current_url}]
-                        elif "/your-designs" in current_url.lower():
-                            # Let Canva finish rendering its grid without changing URL.
-                            _time.sleep(2)
-                            items = driver.execute_script(r"""
-                                const found = new Map();
-                                for (const a of document.querySelectorAll('a[href*="/design/"]')) {
-                                  const href = a.href || "";
-                                  const m = href.match(/\/design\/([A-Za-z0-9_-]+)(?:\/|\?|$)/);
-                                  if (!m) continue;
-                                  const id = m[1];
-                                  const card = a.closest('[role="listitem"], [data-testid]') || a;
-                                  const title = (a.getAttribute("aria-label") || a.getAttribute("title") ||
-                                    card.innerText || a.innerText || a.querySelector("img")?.alt || "")
-                                    .trim().split("\\n").filter(Boolean)[0].slice(0, 255);
-                                  if (!found.has(id)) found.set(id, {id, title, edit_url: href});
-                                }
-                                return Array.from(found.values());
-                            """)
-                        else:
-                            raise ValueError("Sync did not change your screen. Open Canva's Your designs page, or open one design in its editor, then click Sync again.")
+                        live_url = driver.current_url
+                        live_host = (urlparse(live_url).hostname or "").lower()
+                        if live_host not in {"canva.com", "www.canva.com"}:
+                            raise ValueError("Open Canva and complete login in the Selenium browser first.")
 
-                        if not items:
-                            page_text = (driver.find_element("tag name", "body").text or "")[:500].lower()
-                            if any(term in page_text for term in ("verify you are human", "checking your browser", "security challenge", "captcha")):
-                                raise ValueError("Canva verification is visible. Complete it manually and wait for the designs grid to load.")
-                            raise ValueError("No design cards were found on Your designs. Wait for Canva's grid to finish loading and retry.")
+                        # Capture the current authenticated browser state in memory. Do not write
+                        # credentials/cookies to Git or a public file.
+                        storage_state = pw_context.storage_state()
+                        background_browser = None
+                        background_context = None
+                        items_by_id = {}
+                        try:
+                            background_browser = playwright.chromium.launch(headless=True)
+                            background_context = background_browser.new_context(storage_state=storage_state)
+                            scan_page = background_context.new_page()
+                            scan_page.goto(
+                                "https://www.canva.com/your-designs",
+                                wait_until="domcontentloaded",
+                                timeout=60000,
+                            )
+                            scan_page.wait_for_timeout(2500)
 
+                            # Scroll the background design grid to load lazy/virtualized cards.
+                            # Collect after each scroll so cards that leave the DOM are not lost.
+                            stable_rounds = 0
+                            for _scan_round in range(30):
+                                found_now = scan_page.locator('a[href*="/design/"]').evaluate_all(r"""anchors => {
+                                  const found = new Map();
+                                  for (const a of anchors) {
+                                    const href = a.href || "";
+                                    const match = href.match(/\/design\/([A-Za-z0-9_-]+)(?:\/|\?|$)/);
+                                    if (!match) continue;
+                                    const id = match[1];
+                                    const card = a.closest('[role="listitem"], [data-testid]') || a;
+                                    const title = (a.getAttribute("aria-label") || a.getAttribute("title") ||
+                                      card.innerText || a.innerText || a.querySelector("img")?.alt || "")
+                                      .trim().split("\\n").filter(Boolean)[0].slice(0, 255);
+                                    if (!found.has(id)) found.set(id, {id, title, edit_url: href});
+                                  }
+                                  return Array.from(found.values());
+                                }""")
+                                previous_count = len(items_by_id)
+                                for item in found_now:
+                                    if item.get("id"):
+                                        old = items_by_id.get(item["id"], {})
+                                        items_by_id[item["id"]] = {
+                                            "id": item["id"],
+                                            "title": item.get("title") or old.get("title") or "",
+                                            "edit_url": item.get("edit_url") or old.get("edit_url") or "",
+                                        }
+                                if len(items_by_id) == previous_count:
+                                    stable_rounds += 1
+                                else:
+                                    stable_rounds = 0
+                                if stable_rounds >= 4:
+                                    break
+                                scan_page.mouse.wheel(0, 1100)
+                                scan_page.wait_for_timeout(900)
+
+                            if not items_by_id:
+                                current_url = scan_page.url.lower()
+                                page_text = (scan_page.locator("body").inner_text(timeout=10000) or "")[:1500].lower()
+                                if "/login" in current_url or "/signup" in current_url:
+                                    raise ValueError(
+                                        "Background Playwright session is not signed in. "
+                                        "Sign in through Selenium, click Save Canva session, then retry."
+                                    )
+                                if any(term in page_text for term in (
+                                    "verify you are human", "checking your browser",
+                                    "security challenge", "captcha"
+                                )):
+                                    raise ValueError(
+                                        "Canva requires manual verification. Complete it in the visible "
+                                        "Selenium browser, save the session, then retry."
+                                    )
+                                raise ValueError(
+                                    "Playwright opened Canva but found no design cards. "
+                                    "Confirm Your designs loads in Selenium and save the session again."
+                                )
+                        finally:
+                            if background_context is not None:
+                                try:
+                                    background_context.close()
+                                except Exception:
+                                    pass
+                            if background_browser is not None:
+                                try:
+                                    background_browser.close()
+                                except Exception:
+                                    pass
+
+                        items = list(items_by_id.values())
                         created = updated = 0
                         for item in items:
                             design_id = item.get("id")
@@ -398,10 +451,11 @@ class CanvaBrowserWorker:
                                     "asset_type": "unknown",
                                     "status": "browser_discovered",
                                     "raw_data": {
-                                        "source": "selenium_live_browser",
+                                        "source": "playwright_background_ui_scan",
+                                        "automation": ["selenium_session", "playwright_headless"],
                                         "edit_url": item.get("edit_url"),
                                         "discovered_at": timezone.now().isoformat(),
-                                        "export_note": "This is the real Canva design record/link, not a screenshot. Use Export MP4 to download the actual rendered video.",
+                                        "export_note": "Real Canva design metadata/link discovered through the website UI; not a screenshot and not a Canva API response.",
                                     },
                                     "last_modified": timezone.now(),
                                 },
@@ -416,7 +470,10 @@ class CanvaBrowserWorker:
                             "created": created,
                             "updated": updated,
                             "designs": items[:100],
-                            "message": "Canva design records synced without navigating the visible browser.",
+                            "message": (
+                                "Background Playwright UI scan completed. The visible Selenium browser "
+                                "was not navigated or scrolled; no Canva API was used."
+                            ),
                         }
                     elif kind == "save_session":
                         # Keep Chrome's profile and export Playwright state for other workflows.
