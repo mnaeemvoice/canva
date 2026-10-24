@@ -329,40 +329,61 @@ class CanvaBrowserWorker:
                             "total": len(canva_cookies),
                         }
                     elif kind == "sync_designs":
-                        # Sync from the same live Selenium browser the user can see.
-                        # The user must complete Canva login/verification manually first.
+                        # Never navigate the user's visible browser during sync.
+                        # On Your designs, collect visible design cards. In an editor,
+                        # sync the design currently open from its real Canva URL.
                         from django.utils import timezone
                         from .models import CanvaDesign
+                        import re
+                        import time as _time
 
                         current_url = driver.current_url
-                        if "canva.com" not in urlparse(current_url).hostname.lower():
-                            raise ValueError("Open Canva in the remote browser before syncing.")
+                        parsed_url = urlparse(current_url)
+                        hostname = (parsed_url.hostname or "").lower()
+                        if hostname not in {"canva.com", "www.canva.com"}:
+                            raise ValueError("Open Canva in the remote browser first. Sync will not navigate the browser for you.")
                         if any(term in current_url.lower() for term in ("/login", "/signup", "challenge")):
-                            raise ValueError("Canva login or verification is still required. Complete it in the browser, open Your designs, then retry.")
-                        if "/your-designs" not in current_url.lower():
-                            driver.get("https://www.canva.com/your-designs")
-                            import time as _time
-                            _time.sleep(3)
+                            raise ValueError("Canva login or verification is still required. Complete it manually, then retry sync.")
 
-                        # Extract only design links rendered in the signed-in page DOM.
-                        items = driver.execute_script(r"""
-                            const found = new Map();
-                            for (const a of document.querySelectorAll('a[href*="/design/"]')) {
-                              const href = a.href || "";
-                              const m = href.match(/\/design\/([A-Za-z0-9_-]+)(?:\/|\?|$)/);
-                              if (!m) continue;
-                              const id = m[1];
-                              const title = (a.getAttribute("aria-label") || a.innerText ||
-                                a.querySelector("img")?.alt || "").trim().slice(0, 255);
-                              if (!found.has(id)) found.set(id, {id, title, edit_url: href});
-                            }
-                            return Array.from(found.values());
-                        """)
+                        # If the user is already editing a design, sync that exact design
+                        # and leave the editor open. Do not redirect them to Your designs.
+                        editor_match = re.search(r"/design/([A-Za-z0-9_-]+)(?:/edit|/view|[/?#]|$)", parsed_url.path)
+                        if editor_match:
+                            design_id = editor_match.group(1)
+                            title = driver.execute_script("""
+                                const title = document.querySelector('[contenteditable="true"][aria-label*="title" i]')?.innerText
+                                  || document.querySelector('input[aria-label*="title" i]')?.value
+                                  || document.title || '';
+                                return String(title).replace(/\\s*[-|]\\s*Canva.*$/i, '').trim().slice(0,255);
+                            """) or ("Canva design " + design_id)
+                            items = [{"id": design_id, "title": title, "edit_url": current_url}]
+                        elif "/your-designs" in current_url.lower():
+                            # Let Canva finish rendering its grid without changing URL.
+                            _time.sleep(2)
+                            items = driver.execute_script(r"""
+                                const found = new Map();
+                                for (const a of document.querySelectorAll('a[href*="/design/"]')) {
+                                  const href = a.href || "";
+                                  const m = href.match(/\/design\/([A-Za-z0-9_-]+)(?:\/|\?|$)/);
+                                  if (!m) continue;
+                                  const id = m[1];
+                                  const card = a.closest('[role="listitem"], [data-testid]') || a;
+                                  const title = (a.getAttribute("aria-label") || a.getAttribute("title") ||
+                                    card.innerText || a.innerText || a.querySelector("img")?.alt || "")
+                                    .trim().split("\\n").filter(Boolean)[0].slice(0, 255);
+                                  if (!found.has(id)) found.set(id, {id, title, edit_url: href});
+                                }
+                                return Array.from(found.values());
+                            """)
+                        else:
+                            raise ValueError("Sync did not change your screen. Open Canva's Your designs page, or open one design in its editor, then click Sync again.")
+
                         if not items:
                             page_text = (driver.find_element("tag name", "body").text or "")[:500].lower()
                             if any(term in page_text for term in ("verify you are human", "checking your browser", "security challenge", "captcha")):
-                                raise ValueError("Cloudflare verification is visible. Complete it manually in the browser, wait for Your designs to load, then retry sync.")
-                            raise ValueError("No design links were found on Canva's page. Confirm you are signed in and the Your designs grid has finished loading.")
+                                raise ValueError("Canva verification is visible. Complete it manually and wait for the designs grid to load.")
+                            raise ValueError("No design cards were found on Your designs. Wait for Canva's grid to finish loading and retry.")
+
                         created = updated = 0
                         for item in items:
                             design_id = item.get("id")
@@ -380,7 +401,7 @@ class CanvaBrowserWorker:
                                         "source": "selenium_live_browser",
                                         "edit_url": item.get("edit_url"),
                                         "discovered_at": timezone.now().isoformat(),
-                                        "export_note": "Metadata synced from the signed-in browser. Use Export MP4 where Canva offers MP4 export.",
+                                        "export_note": "This is the real Canva design record/link, not a screenshot. Use Export MP4 to download the actual rendered video.",
                                     },
                                     "last_modified": timezone.now(),
                                 },
@@ -395,7 +416,7 @@ class CanvaBrowserWorker:
                             "created": created,
                             "updated": updated,
                             "designs": items[:100],
-                            "message": "Design metadata synced from the live signed-in Canva browser.",
+                            "message": "Canva design records synced without navigating the visible browser.",
                         }
                     elif kind == "save_session":
                         # Keep Chrome's profile and export Playwright state for other workflows.
