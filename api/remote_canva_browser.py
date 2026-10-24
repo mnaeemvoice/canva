@@ -126,7 +126,7 @@ class CanvaBrowserWorker:
                         try:
                             driver = uc.Chrome(
                                 options=create_options(str(PROFILE_DIR.resolve())),
-                                headless=True, # Force headless for stability on server
+                                headless=headless,  # Set CANVA_HEADLESS=1 for headless mode; headed mode allows manual verification.
                                 version_main=major_version,
                                 browser_executable_path=chrome_binary
                             )
@@ -137,7 +137,7 @@ class CanvaBrowserWorker:
                             try:
                                 driver = uc.Chrome(
                                     options=create_options(temp_profile),
-                                    headless=True,
+                                    headless=headless,
                                     version_main=major_version,
                                     browser_executable_path=chrome_binary
                                 )
